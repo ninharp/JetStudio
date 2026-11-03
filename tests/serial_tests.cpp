@@ -48,6 +48,12 @@ int main(){
     std::string error;
     check(!port.open("/dev/jet-studio-missing", 115200, error) && !error.empty(), "missing device reports an error");
     check(!port.open(device, 1234, error) && error.find("1234") != std::string::npos, "unsupported speed is rejected");
+    //the rates the Serial monitor offers, on every platform.
+    for(const int baud : {460800, 921600}){
+        check(port.open(device, baud, error), "the monitor's fast rates open");
+        port.close();
+    }
+
     check(port.open(device, 115200, error) && port.is_open() && port.path() == device, "open the pseudo-terminal");
     uint8_t byte;
     check(port.read(&byte, 1) == 0, "read never blocks when nothing arrived");

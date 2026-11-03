@@ -984,7 +984,7 @@ func _mouseButton(event: InputEventMouseButton):
 
 	if event.button_index == MOUSE_BUTTON_MIDDLE or emulate:
 		if event.pressed and not previewCamera:
-			_nav = Nav.PAN if event.shift_pressed else (Nav.ZOOM if event.ctrl_pressed else Nav.ORBIT)
+			_nav = Nav.PAN if event.shift_pressed else (Nav.ZOOM if event.is_command_or_control_pressed() else Nav.ORBIT)
 		elif not event.pressed and _nav in [Nav.ORBIT, Nav.PAN, Nav.ZOOM]:
 			_nav = Nav.NONE
 	elif event.button_index == MOUSE_BUTTON_RIGHT:
@@ -1075,7 +1075,7 @@ func _input2D(event: InputEvent):
 
 				if _nav == Nav.EDIT_2D:
 					_nav = Nav.NONE
-					_updateEdit2D(event.position, true, event.shift_pressed, event.ctrl_pressed)
+					_updateEdit2D(event.position, true, event.shift_pressed, event.is_command_or_control_pressed())
 					_drag = {}
 					overlay.queue_redraw()
 				elif _press.distance_to(event.position) < 4.0:
@@ -1084,7 +1084,7 @@ func _input2D(event: InputEvent):
 			_zoom2D(1.1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1 / 1.1, event.position)
 	elif event is InputEventMouseMotion:
 		if _nav == Nav.PAN: _pan2D(event.relative)
-		elif _nav == Nav.EDIT_2D: _updateEdit2D(event.position, false, event.shift_pressed, event.ctrl_pressed)
+		elif _nav == Nav.EDIT_2D: _updateEdit2D(event.position, false, event.shift_pressed, event.is_command_or_control_pressed())
 		elif not _leftDown and not playing:
 			var hover := _handleAt2D(event.position)
 
@@ -1097,12 +1097,12 @@ func _input2D(event: InputEvent):
 	elif event is InputEventMagnifyGesture:
 		_zoom2D(event.factor, area.get_local_mouse_position())
 	elif event is InputEventKey and event.pressed:
-		if event.keycode in [KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN] and not event.ctrl_pressed and not event.alt_pressed:
+		if event.keycode in [KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_DOWN] and not (event.ctrl_pressed or event.is_command_or_control_pressed()) and not event.alt_pressed:
 			if not _nudge2D(event.keycode, event.shift_pressed): return
 		elif event.echo: return
-		elif event.ctrl_pressed and event.keycode == KEY_D: duplicate_requested.emit()
+		elif event.is_command_or_control_pressed() and event.keycode == KEY_D: duplicate_requested.emit()
 		elif event.keycode == KEY_DELETE: delete_requested.emit()
-		elif event.ctrl_pressed or event.alt_pressed: return
+		elif event.ctrl_pressed or event.is_command_or_control_pressed() or event.alt_pressed: return
 		elif event.keycode == KEY_Q: _setTool(Tool.SELECT)
 		elif event.keycode == KEY_W: _setTool(Tool.MOVE)
 		elif event.keycode == KEY_E: _setTool(Tool.ROTATE)
@@ -1577,11 +1577,11 @@ func _zoom(factor: float):
 
 
 func _key(event: InputEventKey):
-	if event.ctrl_pressed and event.keycode == KEY_D:
+	if event.is_command_or_control_pressed() and event.keycode == KEY_D:
 		duplicate_requested.emit()
 	elif event.keycode == KEY_DELETE:
 		delete_requested.emit()
-	elif event.ctrl_pressed or event.alt_pressed or _nav == Nav.FREELOOK:
+	elif event.ctrl_pressed or event.is_command_or_control_pressed() or event.alt_pressed or _nav == Nav.FREELOOK:
 		return
 	else:
 		match event.keycode:
@@ -1592,9 +1592,9 @@ func _key(event: InputEventKey):
 			KEY_T: _localButton.button_pressed = not _localButton.button_pressed
 			KEY_Y: _snapButton.button_pressed = not _snapButton.button_pressed
 			KEY_F: focusSelection()
-			KEY_KP_7: _onViewMenu(1 if event.ctrl_pressed else 0)
-			KEY_KP_1: _onViewMenu(3 if event.ctrl_pressed else 2)
-			KEY_KP_3: _onViewMenu(5 if event.ctrl_pressed else 4)
+			KEY_KP_7: _onViewMenu(1 if event.is_command_or_control_pressed() else 0)
+			KEY_KP_1: _onViewMenu(3 if event.is_command_or_control_pressed() else 2)
+			KEY_KP_3: _onViewMenu(5 if event.is_command_or_control_pressed() else 4)
 			_: return
 
 	area.accept_event()

@@ -157,7 +157,7 @@ func _gui_input(event: InputEvent):
 			_dragAccum += event.relative.x * speed
 			var target := _dragStartValue + _dragAccum * step
 
-			if event.ctrl_pressed: target = snappedf(target, step * 10)
+			if event.is_command_or_control_pressed(): target = snappedf(target, step * 10)
 
 			_set(target, false)
 

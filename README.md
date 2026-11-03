@@ -520,7 +520,12 @@ package and the project have the same actions.
 **Platforms**: Jet Studio runs on **Linux x86_64** (developed and tested on Ubuntu 24.04, X11 and
 Wayland), and on **Windows 10/11 x86_64** from a package cross-built on Linux (step 5; tested on
 Windows 11 with the editor, the C++ tests, the editor smoke test and the Serial panel on both
-boards). macOS is not supported yet. The firmware side (PlatformIO, ESP-IDF) is cross-platform.
+boards), and from source on **macOS arm64**: `brew install python@3.12 pipx ninja cmake sdl2`, then
+`pipx install --python python3.12 scons` and `pipx install --python python3.12 platformio`, then
+`pipx inject scons zstandard` and `pipx inject platformio intelhex` (with `~/.local/bin` on PATH).
+Then `./jet-studio setup`, `./jet-studio godot`, `./jet-studio build` and `./jet-studio run`.
+Flashing works from the editor and uses the port chosen in the Serial panel. There is no macOS
+release package. The firmware side (PlatformIO, ESP-IDF) is cross-platform.
 
 **1. System packages** (Ubuntu/Debian):
 

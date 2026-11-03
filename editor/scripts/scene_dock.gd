@@ -298,11 +298,11 @@ func _treeInput(event: InputEvent):
 
 	if event.keycode == KEY_DELETE and _selected > 0: delete_requested.emit(_selected)
 	elif event.keycode == KEY_F2: _beginRename()
-	elif event.ctrl_pressed and event.keycode == KEY_D and _selected > 0: duplicate_requested.emit(_selected)
-	elif event.ctrl_pressed and event.keycode == KEY_A: add_requested.emit(_selected if _selected > 0 else _rootId())
-	elif event.ctrl_pressed and event.keycode == KEY_UP: reorder_requested.emit(_selected, -1)
-	elif event.ctrl_pressed and event.keycode == KEY_DOWN: reorder_requested.emit(_selected, 1)
-	elif event.ctrl_pressed and event.shift_pressed and event.keycode == KEY_C: copy_path_requested.emit(_selected)
+	elif event.is_command_or_control_pressed() and event.keycode == KEY_D and _selected > 0: duplicate_requested.emit(_selected)
+	elif event.is_command_or_control_pressed() and event.keycode == KEY_A: add_requested.emit(_selected if _selected > 0 else _rootId())
+	elif event.is_command_or_control_pressed() and event.keycode == KEY_UP: reorder_requested.emit(_selected, -1)
+	elif event.is_command_or_control_pressed() and event.keycode == KEY_DOWN: reorder_requested.emit(_selected, 1)
+	elif event.is_command_or_control_pressed() and event.shift_pressed and event.keycode == KEY_C: copy_path_requested.emit(_selected)
 	else: handled = false
 
 	if handled: tree.accept_event()

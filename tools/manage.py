@@ -13,8 +13,16 @@ import tarfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-GODOT = ROOT / "third_party/godot/bin/godot.linuxbsd.template_debug.x86_64"
-RELEASE_GODOT = ROOT / "third_party/godot/bin/godot.linuxbsd.template_release.x86_64"
+MACOS = sys.platform == "darwin"
+
+
+def godot_binary(target):
+    name = f"godot.macos.{target}.arm64" if MACOS else f"godot.linuxbsd.{target}.x86_64"
+    return ROOT / "third_party/godot/bin" / name
+
+
+GODOT = godot_binary("template_debug")
+RELEASE_GODOT = godot_binary("template_release")
 LOCK = ROOT / "dependencies.lock.json"
 PATCHES = ROOT / "tools/patches"
 
@@ -48,6 +56,9 @@ def cleanSnapEnvironment():
 
 # Native Wayland keeps text sharp on HiDPI; under XWayland the compositor upscales a low-res window.
 def displayArguments():
+    if MACOS:
+        return []  # one display server, no choice to make
+
     choice = os.environ.get("JET_STUDIO_DISPLAY", "auto")
 
     if choice == "auto":
@@ -131,12 +142,17 @@ def setup(update=False):
     LOCK.write_text(json.dumps(dependencies, indent=2) + "\n", encoding="utf-8")
 
 
-def buildGodot(jobs, target="template_debug", platform="linuxbsd"):
+def buildGodot(jobs, target="template_debug", platform=None):
+    platform = platform or ("macos" if MACOS else "linuxbsd")
     if not (ROOT / "third_party/godot/SConstruct").exists():
         raise RuntimeError("Run ./jet-studio setup first")
 
     extra = ["use_mingw=yes", f"mingw_prefix={mingw()}", "d3d12=no", "angle=no"] if platform == "windows" else []
-    run(["scons", f"platform={platform}", f"target={target}", "arch=x86_64", "dev_build=no",
+    arch = "arm64" if platform == "macos" else "x86_64"
+    # The editor only uses gl_compatibility: no Metal, and no ANGLE download.
+    if platform == "macos":
+        extra = ["metal=no", "angle=no"]
+    run(["scons", f"platform={platform}", f"target={target}", f"arch={arch}", "dev_build=no",
          "debug_symbols=no", "optimize=speed", "disable_3d=yes", "disable_path_overrides=no",
          "vulkan=no", "opengl3=yes", "modules_enabled_by_default=no",
          "module_gdscript_enabled=yes", "module_freetype_enabled=yes",
@@ -320,6 +336,8 @@ def releaseWindows(jobs):
 
 # Portable folder and tarball in dist/, laid out like the repo so the editor and tasks.py find everything.
 def release(jobs):
+    if MACOS:
+        raise RuntimeError("./jet-studio release builds the Linux package; on macOS use ./jet-studio run")
     buildGodot(jobs, "template_release")
     build(jobs)
     run(["ctest", "--test-dir", ROOT / "build", "--output-on-failure"])

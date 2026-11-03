@@ -17,6 +17,9 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <IOKit/serial/ioss.h>
+#endif
 #endif
 
 namespace jetstudio{
@@ -34,11 +37,17 @@ namespace jetstudio{
                 case 57600: return B57600;
                 case 115200: return B115200;
                 case 230400: return B230400;
+#ifdef __APPLE__
+                //termios stops at B230400 here; open() sets these through IOSSIOSPEED.
+                case 460800:
+                case 921600: return speed_t(baud);
+#else
 #ifdef B460800
                 case 460800: return B460800;
 #endif
 #ifdef B921600
                 case 921600: return B921600;
+#endif
 #endif
                 default: return 0;
             }
@@ -101,7 +110,7 @@ namespace jetstudio{
             devices.push_back(resolved(link));
         }
 
-        for(const char* prefix : {"ttyACM", "ttyUSB", "cu.usbmodem", "cu.usbserial"})
+        for(const char* prefix : {"ttyACM", "ttyUSB", "cu.usbmodem", "cu.usbserial", "cu.wchusbserial", "cu.SLAB_USBtoUART"})
             for(const auto& device : entries("/dev", prefix))
                 if(std::find(devices.begin(), devices.end(), device) == devices.end())
                     ports.push_back({device, device.substr(5)});
@@ -118,8 +127,10 @@ namespace jetstudio{
         if(fd < 0){
             error = path + ": " + std::strerror(errno);
 
+#ifndef __APPLE__
             if(errno == EACCES)
                 error += " (add the user to the dialout group: sudo usermod -aG dialout $USER, then log in again)";
+#endif
             return false;
         }
 
@@ -135,14 +146,27 @@ namespace jetstudio{
         tio.c_cflag |= CLOCAL | CREAD;
         tio.c_cc[VMIN] = 0;
         tio.c_cc[VTIME] = 0;
-        cfsetispeed(&tio, speed);
-        cfsetospeed(&tio, speed);
+#ifdef __APPLE__
+        const bool custom = speed > B230400;
+#else
+        const bool custom = false;
+#endif
+        cfsetispeed(&tio, custom ? B115200 : speed);
+        cfsetospeed(&tio, custom ? B115200 : speed);
 
         if(tcsetattr(fd, TCSANOW, &tio) != 0){
             error = path + ": configuration failed (" + std::strerror(errno) + ").";
             ::close(fd);
             return false;
         }
+#ifdef __APPLE__
+        //a pseudo-terminal has no baud rate to set: ENOTTY is not a failure.
+        if(custom && ioctl(fd, IOSSIOSPEED, &speed) != 0 && errno != ENOTTY){
+            error = path + ": configuration failed (" + std::strerror(errno) + ").";
+            ::close(fd);
+            return false;
+        }
+#endif
 
         //keep DTR and RTS low, like monitor_dtr/monitor_rts = 0 in platformio.ini.
         //otherwise the USB Serial/JTAG auto-reset logic restarts or halts the board.

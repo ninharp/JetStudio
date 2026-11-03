@@ -93,6 +93,7 @@ var stopButton: Button
 var stepButton: Button
 # PC, <board> · Debug, <board> · Release
 var targetSelect: OptionButton
+var layoutBox: VBoxContainer
 var serial_monitor: SerialMonitor
 var buildButton: Button
 var flashButton: Button
@@ -125,6 +126,7 @@ func _ready():
 	_applyScale(float(settings.get_value("editor", "scale", 0.0)))
 	theme = Style.build()
 	get_window().min_size = Vector2i(1100, 700)
+	_sizeWindow()
 	_buildUi()
 	_buildDialogs()
 
@@ -191,6 +193,21 @@ func _applyScale(value: float):
 		elif scale <= 1.0 and dpi >= 144: scale = 1.5
 
 	get_window().content_scale_factor = clampf(scale, 0.75, 3.0)
+
+
+# Startup only: macOS sizes windows in pixels, so the 1440x900 layout needs the content scale applied.
+func _sizeWindow():
+	if OS.get_name() != "macOS" or DisplayServer.get_name() == "headless": return
+
+	var window := get_window()
+	var usable := DisplayServer.screen_get_usable_rect(window.current_screen)
+
+	if usable.size.x <= 0: return
+
+	var factor := window.content_scale_factor
+	window.min_size = Vector2i(Vector2(1100, 700) * factor).min(usable.size)
+	window.size = Vector2i(Vector2(1440, 900) * factor).min(usable.size)
+	window.move_to_center()
 
 
 # The folder with tools/, firmware/ and examples/: the repo, or a release whose bin/ holds the executable with the editor inside.
@@ -267,6 +284,7 @@ func _buildUi():
 
 	add_child(margin)
 	var layout := VBoxContainer.new()
+	layoutBox = layout
 	layout.add_theme_constant_override("separation", 8)
 	margin.add_child(layout)
 	#header: brand + menus | main screens | play controls | target
@@ -290,7 +308,7 @@ func _buildUi():
 	#clip long project names, otherwise they widen the window.
 	projectLabel.clip_text = true
 	projectLabel.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	projectLabel.custom_minimum_size.x = 60
+	projectLabel.custom_minimum_size.x = 0
 	projectLabel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	projectLabel.size_flags_stretch_ratio = 0.6
 	bar.add_child(projectLabel)
@@ -393,6 +411,9 @@ func _buildUi():
 	targetSelect.add_icon_item(Icons.get_icon("Tools"), "Board · Debug")
 	targetSelect.add_icon_item(Icons.get_icon("Tools"), "Board · Release")
 	targetSelect.focus_mode = Control.FOCUS_NONE
+	targetSelect.clip_text = true
+	targetSelect.fit_to_longest_item = false
+	targetSelect.custom_minimum_size.x = 185
 	targetSelect.item_selected.connect(func(i):
 		project.config.target = "device" if i > 0 else "desktop"
 		if i > 0: project.config.profile = "release" if i == 2 else "debug"
@@ -3182,8 +3203,13 @@ func _startTask(action: String):
 	if action == "flash": _serialWasOpen = serial_monitor.suspend()
 
 	_jobAction = action
-	_jobId = OS.create_process(_python(), PackedStringArray([_rootDir().path_join("tools/tasks.py"), action, "--target", target,
-		"--profile", profile, "--pack", _jobPrefix + ".jetpack", "--project", project.root, "--job", _jobPrefix]))
+	var arguments := PackedStringArray([_rootDir().path_join("tools/tasks.py"), action, "--target", target,
+		"--profile", profile, "--pack", _jobPrefix + ".jetpack", "--project", project.root, "--job", _jobPrefix])
+	#macOS: a board can show up on two ports and only one answers, so use the one chosen in the Serial panel.
+	if action == "flash" and OS.get_name() == "macOS" and not serial_monitor.selectedPort().is_empty():
+		arguments.append_array(["--port", serial_monitor.selectedPort()])
+
+	_jobId = OS.create_process(_python(), arguments)
 
 	if _jobId < 0:
 		_fail("Cannot start Python for the build. Install Python 3 and PlatformIO Core (pip install platformio).")
@@ -4198,6 +4224,7 @@ func _runSmoke():
 	#example project
 	_openProject(_exampleFolder())
 	_check(current >= 0 and not _dirty(_tab()), "an opened scene has no unsaved changes")
+	_check(layoutBox.get_combined_minimum_size().x <= 1420, "the layout fits the 1440 px design width")
 	_play(false)
 	_check(playing, "example project plays")
 

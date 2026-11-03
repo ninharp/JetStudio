@@ -677,10 +677,10 @@ func _timelineInput(event: InputEvent):
 	if event is InputEventMouseButton:
 		var row := _rowOf(event.position.y)
 
-		if event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and (event.ctrl_pressed or event.shift_pressed):
+		if event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and (event.is_command_or_control_pressed() or event.shift_pressed):
 			var up: bool = event.button_index == MOUSE_BUTTON_WHEEL_UP
 
-			if event.ctrl_pressed:
+			if event.is_command_or_control_pressed():
 				var anchor := _timeOf(event.position.x)
 				_pixelsPerSecond = clampf(_pps() * (1.2 if up else 1 / 1.2), 5.0, 5000.0)
 				_viewStart = maxf(0.0, anchor - (event.position.x - NAMES - 8.0) / _pps())

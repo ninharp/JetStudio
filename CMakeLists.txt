@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(JET_STUDIO_EXTENSION "Build the Godot UI bridge" ON)
 option(JET_STUDIO_RUNNER "Build the SDL desktop player" ON)
+# arm64 clang fuses a*b+c by default, which changes rendering results against x86_64 and the firmware.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  add_compile_options(-ffp-contract=off)
+endif()
 if(MINGW)
   # Each Windows binary stands alone, without the MinGW runtime DLLs.
   add_link_options(-static)
