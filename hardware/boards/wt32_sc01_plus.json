@@ -3,9 +3,6 @@
   "short": "SC01 Plus",
   "chip": "esp32s3",
   "platformio_board": "esp32-s3-devkitc-1",
-  "platformio_options": [
-    "board_upload.flash_size = 16MB"
-  ],
   "flash": "16 MB",
   "psram": "2 MB quad",
   "sdkconfig": [
