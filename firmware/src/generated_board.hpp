@@ -4,6 +4,7 @@
 // Panel/bus setup adapted from board_3d / JetExamples (MIT, see hardware/LICENSE.JetExamples).
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
+#define JET_AUDIO 0
 
 namespace Board {
 constexpr const char* name = "Arduino Nano ESP32 + ILI9341 2.4\"/2.8\" 240×320";
@@ -12,6 +13,7 @@ constexpr int clock = 48, mosi = 38, dc = 9, cs = 21, reset = 12, backlight = -1
 constexpr int spiMode = 0;
 constexpr int writeHz = 40000000;
 constexpr bool parallelBus = false;
+constexpr bool hasAudio = false;
 }
 
 class LGFX : public lgfx::LGFX_Device {

@@ -121,6 +121,13 @@
       ]
     }
   },
+  "audio": {
+    "driver": "i2s",
+    "lrclk": 35,
+    "bclk": 36,
+    "dout": 37,
+    "max_db": -7
+  },
   "verified": true,
-  "notes": "ST7796 on the built-in 8-bit bus and FT6336U touch: use the WT32-SC01 Plus display. Free for buttons: GPIO10-14 and GPIO21. Touch zones: touch_zones in project.jetproject (percent of the screen)."
+  "notes": "ST7796 on the built-in 8-bit bus and FT6336U touch: use the WT32-SC01 Plus display. Free for buttons: GPIO10-14 and GPIO21. Touch zones: touch_zones in project.jetproject (percent of the screen). NS4168 amplifier on I2S: above about -7 dB it crackles."
 }

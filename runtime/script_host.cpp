@@ -21,7 +21,7 @@ enum Property : int {
     InitialVelocityMin, InitialVelocityMax, DampingMin, DampingMax, CurrentScene,
     Frame, Hframes, Vframes, FlipH, FlipV, PixelSize, Modulate, ZIndex, Centered, Offset, AnimationName, SpeedScale, Zoom, Enabled,
     OneWayCollision, WaitTime, Autostart, Paused, TimeLeft, CurrentAnimation, CurrentAnimationPosition, CurrentAnimationLength,
-    Autoplay, PropertyCount
+    Autoplay, VolumeDb, SoundLoop, PropertyCount
 };
 const char* const property_names[PropertyCount] = {
     "name", "position", "rotation", "rotation_degrees", "scale", "visible", "global_position",
@@ -33,7 +33,7 @@ const char* const property_names[PropertyCount] = {
     "initial_velocity_min", "initial_velocity_max", "damping_min", "damping_max", "current_scene",
     "frame", "hframes", "vframes", "flip_h", "flip_v", "pixel_size", "modulate", "z_index", "centered", "offset", "animation",
     "speed_scale", "zoom", "enabled", "one_way_collision", "wait_time", "autostart", "paused", "time_left", "current_animation",
-    "current_animation_position", "current_animation_length", "autoplay"};
+    "current_animation_position", "current_animation_length", "autoplay", "volume_db", "loop"};
 
 enum Method : int {
     GetNode, GetNodeOrNull, GetParent, GetChildren, GetChild, GetChildCount, FindChild, QueueFree,
@@ -158,6 +158,8 @@ const std::vector<ClassInfo>& class_list() {
             {{"wait_time", Type::Float}, {"one_shot", Type::Bool}, {"autostart", Type::Bool}, {"paused", Type::Bool},
              {"time_left", Type::Float, true}},
             {{"start", 0, 1}, {"stop", 0, 0}, {"is_stopped", 0, 0, Type::Bool}}, {{"timeout", {}}});
+        add("AudioStreamPlayer", "Node", {{"volume_db", Type::Float}, {"loop", Type::Bool}},
+            {{"play", 0, 0}, {"stop", 0, 0}, {"is_playing", 0, 0, Type::Bool}}, {});
         add("AnimationPlayer", "Node",
             {{"current_animation", Type::String}, {"current_animation_position", Type::Float, true},
              {"current_animation_length", Type::Float, true}, {"autoplay", Type::String}, {"speed_scale", Type::Float}},
@@ -216,6 +218,7 @@ bool has_property(NodeType type, int p) {
     case SpeedScale: return type == NodeType::AnimatedSprite2D || type == NodeType::AnimationPlayer;
     case CurrentAnimation: case CurrentAnimationPosition: case CurrentAnimationLength: case Autoplay:
         return type == NodeType::AnimationPlayer;
+    case VolumeDb: case SoundLoop: return type == NodeType::AudioStreamPlayer;
     case Zoom: case Enabled: return type == NodeType::Camera2D;
     case UvOffset: case UvScale: case PerspectiveCorrect: case TextureFilter: return type == NodeType::MeshInstance3D;
     case Text: return type == NodeType::Label;
@@ -249,8 +252,8 @@ bool node_has_method(NodeType type, int m) {
     if (m == Translate || m == LookAt || m == IsVisibleInTree || m == Rotate) return is_node3d(type) ? m != Rotate : is_node2d(type);
     if (m <= IsVisibleInTree) return is_node3d(type);
     if (m == MakeCurrent) return type == NodeType::Camera3D || type == NodeType::Camera2D;
-    if (m == Play || m == IsPlaying) return type == NodeType::AnimatedSprite2D || type == NodeType::AnimationPlayer;
-    if (m == Stop) return type == NodeType::AnimatedSprite2D || type == NodeType::Timer || type == NodeType::AnimationPlayer;
+    if (m == Play || m == IsPlaying) return type == NodeType::AnimatedSprite2D || type == NodeType::AnimationPlayer || type == NodeType::AudioStreamPlayer;
+    if (m == Stop) return type == NodeType::AnimatedSprite2D || type == NodeType::Timer || type == NodeType::AnimationPlayer || type == NodeType::AudioStreamPlayer;
     if (m == Pause || m == PlayBackwards || m == Seek || m == HasAnimation || m == GetAnimationList) return type == NodeType::AnimationPlayer;
     if (m == Start || m == IsStopped) return type == NodeType::Timer;
     if (m == CreateTween) return true;
@@ -515,6 +518,8 @@ Status ScriptHost::get_property(ObjectId id, int p, Value& out, std::string& err
     case Paused: out = Value(d.more().paused); break;
     case SpeedScale: out = Value(d.more().speed_scale); break;
     case Autoplay: out = Value(d.more().animation); break;
+    case VolumeDb: out = Value(d.more().volume_db); break;
+    case SoundLoop: out = Value(d.more().loop); break;
     case CurrentAnimation: case CurrentAnimationPosition: case CurrentAnimationLength: {
         // Godot: the animation playing (or paused partway), "" otherwise.
         const auto& e = d.more();
@@ -700,6 +705,8 @@ Status ScriptHost::set_property(ObjectId id, int p, const Value& v, std::string&
     case Paused: ok = expect(Type::Bool); if (ok) d.extras().paused = v.truthy(); break;
     case SpeedScale: ok = number(d.extras().speed_scale, -100, 100); break;
     case Autoplay: ok = expect(Type::String); if (ok) d.extras().animation = std::string(v.as_string()); break;
+    case VolumeDb: ok = number(d.extras().volume_db, -80, 0); break;
+    case SoundLoop: ok = expect(Type::Bool); if (ok) d.extras().loop = v.truthy(); break;
     case CurrentAnimation:
         ok = expect(Type::String);
         if (ok && v.as_string().empty()) runtime_->stop_player(live, true);
@@ -984,6 +991,7 @@ Status ScriptHost::call_method(ObjectId id, int m, const Value* args, int count,
     }
     case QueueFree: node.free_requested = true; runtime_->pending_free_ = true; return Status::Ok;
     case Play: {
+        if (node.d.type == NodeType::AudioStreamPlayer) { runtime_->play_sound(node); return Status::Ok; }
         std::string_view name;
         if (count >= 1 && !arg_string(0, name)) return Status::Error;
         if (node.d.type == NodeType::AnimationPlayer) {
@@ -1004,6 +1012,10 @@ Status ScriptHost::call_method(ObjectId id, int m, const Value* args, int count,
         return Status::Ok;
     }
     case Stop:
+        if (node.d.type == NodeType::AudioStreamPlayer) {
+            if (runtime_->audio_) runtime_->audio_->stop(node.d.id);
+            return Status::Ok;
+        }
         if (node.d.type == NodeType::AnimationPlayer) {
             runtime_->stop_player(node, count >= 1 && args[0].truthy());
             return Status::Ok;
@@ -1026,7 +1038,13 @@ Status ScriptHost::call_method(ObjectId id, int m, const Value* args, int count,
         return Status::Ok;
     }
     case IsStopped: result = Value(!node.d.more().playing); return Status::Ok;
-    case IsPlaying: result = Value(node.d.more().playing); return Status::Ok;
+    case IsPlaying:
+        if (node.d.type == NodeType::AudioStreamPlayer) {
+            result = Value(runtime_->audio_ && runtime_->audio_->is_playing(node.d.id));
+            return Status::Ok;
+        }
+        result = Value(node.d.more().playing);
+        return Status::Ok;
     case Pause: node.d.extras().playing = false; return Status::Ok;
     case PlayBackwards: case Seek: case HasAnimation: case GetAnimationList: {
         const auto& animations = node.d.more().player_animations;

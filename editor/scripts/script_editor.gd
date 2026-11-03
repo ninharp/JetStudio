@@ -15,7 +15,7 @@ const KEYWORDS := ["if", "elif", "else", "for", "while", "break", "continue", "p
 const CONTROL_FLOW := ["if", "elif", "else", "for", "while", "break", "continue", "pass", "return", "match", "await", "yield"]
 const BASE_TYPES := ["bool", "int", "float", "String", "Vector2", "Vector3", "Color", "Array", "Dictionary", "Callable", "Signal",
 	"null", "true", "false", "PI", "TAU", "INF", "NAN", "OK", "CONNECT_ONE_SHOT"]
-const ENGINE_TYPES := ["Node", "Node3D", "MeshInstance3D", "Camera3D", "DirectionalLight3D", "WorldEnvironment", "Input"]
+const ENGINE_TYPES := ["Node", "Node3D", "MeshInstance3D", "Camera3D", "DirectionalLight3D", "WorldEnvironment", "Input", "AudioStreamPlayer"]
 const BUILTINS := ["print", "printerr", "str", "int", "float", "bool", "len", "range", "abs", "sign", "floor", "ceil", "round",
 	"sqrt", "pow", "exp", "log", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "deg_to_rad", "rad_to_deg", "min", "max",
 	"clamp", "clampf", "clampi", "lerp", "lerpf", "inverse_lerp", "move_toward", "wrapf", "wrapi", "fmod", "fposmod", "posmod",

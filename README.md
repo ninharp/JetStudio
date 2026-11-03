@@ -220,7 +220,7 @@ vertices per part and 262144 per scene.
 The editor keeps an eye on the board's budget. A model or image that brings in a texture over
 96 KiB triggers an offer to import it at 256 px with 256 colors. A model with more than 3000 triangles
 gets a warning in the Output, since every triangle costs frame time on the board. Before Build or
-Flash on the board, a package over 1 MiB (the firmware's limit) stops with the list of textures
+Flash on the board, a package over the firmware's limit (2.25 MiB on ESP32, 1 MiB on STM32) stops with the list of textures
 to shrink, largest first: 256 colors, then half the size. One button compresses them and starts
 again. Only the import settings change, never the PNG files.
 
@@ -502,7 +502,7 @@ package and the project have the same actions.
   (save them to update the file).
 - `.jet`: JetScript script.
 - `*.import`: import settings of a PNG or OBJ (JSON, next to the file).
-- `.jetpack`: binary package version 17 (resolution, Input Map, every scene of the project with its 3D and 2D nodes, animations and signal connections, autoloads, materials, converted textures, imported meshes, script bytecode, exported values)
+- `.jetpack`: binary package version 18 (resolution, Input Map, every scene of the project with its 3D and 2D nodes, animations and signal connections, autoloads, materials, converted textures, converted sounds, imported meshes, script bytecode, exported values)
   read by the runtime. The bytecode has a version, an instruction-set fingerprint and a CRC; on
   load every operand and jump is verified. A package must be re-exported when the JetScript version changes.
 
@@ -747,7 +747,14 @@ examples/     Example projects (first_world, textured_boxes, neon_car, physics_d
 tools/        Setup, build, assets, examples, launcher and asynchronous jobs
 ```
 
-Not available yet: audio, `await`, lambdas and classes in JetScript,
+## Sound
+
+`AudioStreamPlayer` plays WAV files on boards with an `audio` section (see `hardware/boards/wt32_sc01_plus.json`):
+`play()`, `stop()`, `is_playing()`, `volume_db`, `loop`, and `autoplay` in the Inspector. Up to 4 sounds play at once.
+Export converts PCM WAV (8 or 16 bit, mono or stereo) to mono, 22050 Hz, 16 bit: 44 KB per second, at most 2 MB and
+32 sounds per project. Other boards and Play in the editor are silent.
+
+Not available yet: `await`, lambdas and classes in JetScript,
 animations, particle preview in the editor, a debugger with breakpoints, physics with box
 rotations (arcade only), collisions with OBJ meshes.
 The firmware of the example project (scene + 3 scripts in bytecode) compiles: 521 KB of program

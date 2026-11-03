@@ -75,6 +75,16 @@ def rotation(display, orientation):
     return (base + 1) % 4 if w > h else base  # landscape-native panel
 
 
+def audio_lines(board):
+    """Board:: constants of the amplifier; hasAudio false compiles the I2S task out."""
+    audio = board.get("audio")
+    if not audio:
+        return "constexpr bool hasAudio = false;\n"
+    return (f"constexpr bool hasAudio = true;\n"
+            f"constexpr int audioLrclk = {audio['lrclk']}, audioBclk = {audio['bclk']}, audioDout = {audio['dout']};\n"
+            f"constexpr float audioMaxDb = {float(audio['max_db'])}f;\n")
+
+
 def validate(hw, board, display, button_pins=()):
     usable = {gpio for _, gpio in board["pins"]}
     used = {}
@@ -89,9 +99,15 @@ def validate(hw, board, display, button_pins=()):
         if pin in used:
             raise RuntimeError(f"{pin_label(board, pin)} is used by both {used[pin]} and {name}")
         used[pin] = name
+    audio = board.get("audio") or {}
+    for key in ("lrclk", "bclk", "dout"):
+        if audio.get(key, -1) in used:
+            raise RuntimeError(f"{pin_label(board, audio[key])} of the amplifier ({key}) is also the display's {used[audio[key]]}")
     for action, pin in button_pins:
         if pin in used:
             raise RuntimeError(f"{pin_label(board, pin)} of {action} is also the display's {used[pin]}")
+        if pin in [audio[k] for k in ("lrclk", "bclk", "dout") if k in audio]:
+            raise RuntimeError(f"{pin_label(board, pin)} of {action} is also the amplifier's pin")
         if pin not in usable:
             raise RuntimeError(f"{pin_label(board, pin)} of {action} is not usable on {board['name']}")
     if display.get("controller") not in CONTROLLERS:
@@ -230,14 +246,14 @@ inline void begin_spi() {{
 // Panel/bus setup adapted from board_3d / JetExamples (MIT, see hardware/LICENSE.JetExamples).
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
-{includes}
+{includes}#define JET_AUDIO {1 if board.get('audio') else 0}
 namespace Board {{
 constexpr const char* name = {json.dumps(board['name'] + ' + ' + display['name'], ensure_ascii=False)};
 constexpr int screenWidth = {width}, screenHeight = {height}, rotation = {rotation(display, hw['orientation'])};
 {pins_note}constexpr int clock = {p.get('sck', -1)}, mosi = {p.get('mosi', -1)}, dc = {p['dc']}, cs = {p.get('cs', -1)}, reset = {p.get('reset', -1)}, backlight = {p.get('backlight', -1)};
 constexpr int spiMode = {display.get('spi_mode', 0)};
 constexpr int writeHz = {hw['spi_hz']};
-{board_extra}}}
+{board_extra}{audio_lines(board)}}}
 
 class LGFX : public lgfx::LGFX_Device {{
     lgfx::{CONTROLLERS[display['controller']]} panel;

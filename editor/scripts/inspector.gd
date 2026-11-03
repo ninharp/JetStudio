@@ -425,6 +425,8 @@ func _make_editor(prop: Dictionary, value: Variant, emit: Callable) -> Dictionar
 			return _texture_editor(prop, str(value) if value != null else "", emit)
 		"model":
 			return _model_editor(prop, str(value) if value != null else "", emit)
+		"sound":
+			return _sound_editor(prop, str(value) if value != null else "", emit)
 		"part":
 			return _part_editor(str(value) if value != null else "", emit)
 		"text":
@@ -536,6 +538,40 @@ func _texture_editor(prop: Dictionary, path: String, emit: Callable) -> Dictiona
 			info.add_theme_color_override("font_color", Style.MUTED if pot else Style.WARNING)
 	update.call(path)
 	return {"control": column, "update": update}
+
+func _sound_editor(_prop: Dictionary, path: String, emit: Callable) -> Dictionary:
+	var row := HBoxContainer.new()
+	var button := Button.new()
+	button.icon = Icons.get_icon("File")
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.clip_text = true
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.disabled = read_only
+	row.add_child(button)
+	var clear := Button.new()
+	clear.theme_type_variation = "FlatButton"
+	clear.icon = Icons.get_icon("Clear")
+	clear.tooltip_text = "Remove sound"
+	clear.disabled = read_only
+	clear.pressed.connect(func(): emit.call("", true))
+	row.add_child(clear)
+	var can_drop := func(_at, data) -> bool:
+		if read_only or not data is Dictionary or data.get("type") != "files": return false
+		for file in data.get("files", []):
+			if str(file).get_extension().to_lower() in Document.SOUND_EXTENSIONS: return true
+		return false
+	var drop := func(_at, data):
+		for file in data.files:
+			if str(file).get_extension().to_lower() in Document.SOUND_EXTENSIONS:
+				emit.call(str(file), true)
+				return
+	button.set_drag_forwarding(Callable(), can_drop, drop)
+	var update := func(v):
+		var current := str(v) if v != null else ""
+		button.text = current.get_file() if not current.is_empty() else "<empty>  (drop a WAV here)"
+		button.tooltip_text = current if not current.is_empty() else "Drop a WAV file from the FileSystem dock."
+	update.call(path)
+	return {"control": row, "update": update}
 
 func _model_editor(prop: Dictionary, path: String, emit: Callable) -> Dictionary:
 	var key := str(prop.key)

@@ -38,5 +38,6 @@ static func for_file(path: String) -> Texture2D:
 		"jetpack": return get_icon("Object")
 		"png": return get_icon("ImageTexture")
 		"obj": return get_icon("ArrayMesh")
+		"wav": return get_icon("File")
 		"mtl": return get_icon("StandardMaterial3D")
 	return get_icon("File")

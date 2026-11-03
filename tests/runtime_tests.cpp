@@ -1,6 +1,8 @@
+#include "audio_mixer.hpp"
 #include "obj_import.hpp"
 #include "runtime.hpp"
 #include "script_host.hpp"
+#include "wav_import.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -626,7 +628,7 @@ void model_tests() {
     const auto bytes = encode_pack(packed, error);
     if (bytes.empty()) std::cerr << "pack: " << error << '\n';
     Description back;
-    check(decode_pack(bytes.data(), bytes.size(), back, error), "pack v17 round trips");
+    check(decode_pack(bytes.data(), bytes.size(), back, error), "pack v18 round trips");
     check(back.meshes.size() == 2 && back.meshes[0].vertices.size() == model.meshes[0].vertices.size()
           && back.meshes[0].indices == model.meshes[0].indices, "pack keeps imported meshes");
     const auto& c = back.nodes[back.nodes.size() - 2];
@@ -1854,7 +1856,7 @@ void animation_player_tests() {
     Description back;
     check(decode_pack(bytes.data(), bytes.size(), back, error) && back.nodes[2].more().player_animations.size() == 2
           && back.nodes[2].more().player_animations[0].tracks[2].keys[0].method == "_on_half" && back.nodes[2].more().animation == "move",
-          "the package keeps an AnimationPlayer's animations (v17)");
+          "the package keeps an AnimationPlayer's animations (v18)");
 
     Runtime r;
     std::vector<ScriptDiagnostic> diagnostics;
@@ -1882,6 +1884,329 @@ void animation_player_tests() {
     check(!editor.load(bad, error), "keys past the animation's length are refused");
 }
 
+// Samples as they lie in the package: little endian bytes.
+std::vector<uint8_t> pcm(std::initializer_list<int> values) {
+    std::vector<uint8_t> out;
+    for (int v : values) { out.push_back(uint8_t(v & 255)); out.push_back(uint8_t((v >> 8) & 255)); }
+    return out;
+}
+void audio_mixer_tests() {
+    int16_t out[8];
+    {   // Silence without a voice; a sound plays once, then its voice is free.
+        AudioMixer m;
+        m.mix(out, 2);
+        check(out[0] == 0 && out[1] == 0, "the mixer is silent without voices");
+        const auto s = pcm({1000, -1000});
+        check(m.play(7, s.data(), 2, 0, false) && m.is_playing(7), "play starts a voice");
+        m.mix(out, 4);
+        check(out[0] == 1000 && out[1] == -1000 && out[2] == 0 && out[3] == 0, "a sound plays once and is followed by silence");
+        check(!m.is_playing(7), "a finished sound no longer plays");
+    }
+    {   // Voices add up and clip instead of wrapping around.
+        AudioMixer m;
+        const auto s = pcm({30000, -30000});
+        m.play(1, s.data(), 2, 0, false);
+        m.play(2, s.data(), 2, 0, false);
+        m.mix(out, 2);
+        check(out[0] == 32767 && out[1] == -32768, "the sum clips to 16 bits");
+    }
+    {   // Loudness: the board's limit and the node's volume add up in dB.
+        AudioMixer m;
+        m.set_max_db(-6.02f);
+        const auto s = pcm({20000});
+        m.play(1, s.data(), 1, 0, false);
+        m.mix(out, 1);
+        check(std::abs(out[0] - 10000) < 40, "the board's limit lowers the sound");
+        m.play(1, s.data(), 1, -6.02f, false);
+        m.mix(out, 1);
+        check(std::abs(out[0] - 5000) < 40, "the node's volume adds to the limit");
+    }
+    {   // The board's limit also caps the sum of voices.
+        AudioMixer m;
+        m.set_max_db(-6.02f);
+        const auto s = pcm({32767});
+        m.play(1, s.data(), 1, 0, false);
+        m.play(2, s.data(), 1, 0, false);
+        m.mix(out, 1);
+        check(out[0] > 0 && out[0] <= 16400, "two full-scale voices stay under the board's limit");
+    }
+    {   // A loop wraps around until stop(); stop silences it at once.
+        AudioMixer m;
+        const auto s = pcm({100, 200});
+        m.play(1, s.data(), 2, 0, true);
+        m.mix(out, 5);
+        check(out[2] == 100 && out[3] == 200 && out[4] == 100 && m.is_playing(1), "a loop wraps around");
+        m.stop(1);
+        check(!m.is_playing(1), "stop ends is_playing at once");
+        m.mix(out, 1);
+        check(out[0] == 0, "stop silences the voice");
+    }
+    {   // play() on a playing owner restarts in its voice, it doesn't pile up.
+        AudioMixer m;
+        const auto s = pcm({500, 600, 700});
+        m.play(1, s.data(), 3, 0, false);
+        m.mix(out, 1);
+        m.play(1, s.data(), 3, 0, false);
+        m.mix(out, 1);
+        check(out[0] == 500, "play restarts the owner's own voice");
+    }
+    {   // A fifth sound replaces the oldest voice.
+        AudioMixer m;
+        const auto s = pcm({1, 1, 1, 1});
+        for (uint32_t owner = 1; owner <= 4; ++owner) m.play(owner, s.data(), 4, 0, true);
+        m.play(5, s.data(), 4, 0, true);
+        check(!m.is_playing(1) && m.is_playing(2) && m.is_playing(5), "a fifth sound replaces the oldest");
+        m.stop_all();
+        check(!m.is_playing(2) && !m.is_playing(5), "stop_all ends every voice");
+    }
+    {   // A full command ring refuses instead of blocking the game.
+        AudioMixer m;
+        const auto s = pcm({1});
+        bool refused = false;
+        for (uint32_t i = 0; i < 200; ++i) refused = !m.play(1, s.data(), 1, 0, false) || refused;
+        check(refused, "a full command ring refuses, the game never waits");
+        m.mix(out, 1);
+        check(m.play(1, s.data(), 1, 0, false), "the ring has room again after mixing");
+    }
+    {   // A stop is never lost: play leaves room in the ring for the stops of every voice.
+        AudioMixer m;
+        const auto loop = pcm({1000}), zero = pcm({0});
+        m.play(1, loop.data(), 1, 0, true);
+        m.mix(out, 1);
+        bool refused = false;
+        for (uint32_t i = 0; i < 200 && !refused; ++i) refused = !m.play(2, zero.data(), 1, 0, false);
+        check(refused, "play refuses while the ring still has room for stops");
+        m.stop(1);
+        m.mix(out, 8);
+        bool loop_silent = true;
+        for (int i = 0; i < 8; ++i) loop_silent = loop_silent && out[i] == 0;
+        check(loop_silent && !m.is_playing(1), "a stop on a full ring still silences the loop");
+    }
+}
+
+std::vector<uint8_t> wav(int rate, int channels, int bits, const std::vector<int>& samples, int format = 1) {
+    std::vector<uint8_t> w;
+    auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) w.push_back(uint8_t(v >> (8 * i))); };
+    auto u16 = [&](uint32_t v) { w.push_back(uint8_t(v)); w.push_back(uint8_t(v >> 8)); };
+    auto tag = [&](const char* t) { w.insert(w.end(), t, t + 4); };
+    const uint32_t data = uint32_t(samples.size() * bits / 8);
+    tag("RIFF"); u32(36 + data); tag("WAVE");
+    tag("fmt "); u32(16); u16(format); u16(channels); u32(rate); u32(rate * channels * bits / 8); u16(channels * bits / 8); u16(bits);
+    tag("data"); u32(data);
+    for (int s : samples) { if (bits == 8) w.push_back(uint8_t(s)); else u16(uint16_t(s)); }
+    return w;
+}
+int16_t sample_at(const std::vector<uint8_t>& out, size_t i) { return int16_t(uint16_t(out[i * 2]) | uint16_t(out[i * 2 + 1]) << 8); }
+void wav_tests() {
+    std::vector<uint8_t> out;
+    std::string error;
+    auto w = wav(22050, 1, 16, {1000, -2000});
+    check(decode_wav(w.data(), w.size(), out, error) && out.size() == 4 && sample_at(out, 0) == 1000 && sample_at(out, 1) == -2000, "16 bit mono passes unchanged");
+    w = wav(22050, 1, 8, {128, 255, 0});
+    check(decode_wav(w.data(), w.size(), out, error) && sample_at(out, 0) == 0 && sample_at(out, 1) == 127 * 256 && sample_at(out, 2) == -128 * 256, "8 bit is unsigned and scales up");
+    w = wav(22050, 2, 16, {1000, 3000, -1000, -3000});
+    check(decode_wav(w.data(), w.size(), out, error) && out.size() == 4 && sample_at(out, 0) == 2000 && sample_at(out, 1) == -2000, "stereo is averaged");
+    w = wav(44100, 1, 16, {0, 100, 200, 300, 400, 500});
+    check(decode_wav(w.data(), w.size(), out, error) && out.size() == 6 && sample_at(out, 1) == 200 && sample_at(out, 2) == 400, "44.1 kHz is converted to 22.05 kHz");
+    w = wav(11025, 1, 16, {0, 100});
+    check(decode_wav(w.data(), w.size(), out, error) && sample_at(out, 1) == 50 && sample_at(out, 2) == 100, "11 kHz is interpolated");
+    w = wav(22050, 1, 16, {1, 2}, 3);
+    check(!decode_wav(w.data(), w.size(), out, error) && error.find("PCM") != std::string::npos, "a non-PCM WAV is refused");
+    w = wav(22050, 1, 16, {1, 2});
+    check(!decode_wav(w.data(), 20, out, error), "a truncated WAV is refused");
+    const uint8_t junk[] = "this is not audio at all, not even close to it, really";
+    check(!decode_wav(junk, sizeof junk, out, error), "garbage is refused");
+    // An extra chunk before "data", with its padding byte, as ffmpeg writes it.
+    w = wav(22050, 1, 16, {7});
+    const std::vector<uint8_t> list = {'L', 'I', 'S', 'T', 3, 0, 0, 0, 'a', 'b', 'c', 0};
+    w.insert(w.begin() + 36, list.begin(), list.end());
+    check(decode_wav(w.data(), w.size(), out, error) && out.size() == 2 && sample_at(out, 0) == 7, "extra chunks are skipped");
+    std::ifstream f(std::string(TEST_DATA_DIR) + "/sine_stereo.wav", std::ios::binary);
+    std::vector<uint8_t> real((std::istreambuf_iterator<char>(f)), {});
+    check(decode_wav(real.data(), real.size(), out, error) && out.size() / 2 >= 2200 && out.size() / 2 <= 2210, "an ffmpeg WAV has the expected length");
+    // 100 samples at 1 Hz become about 47 seconds of 22050 Hz audio, over the limit.
+    w = wav(1, 1, 16, std::vector<int>(100));
+    check(!decode_wav(w.data(), w.size(), out, error) && error.find("too long") != std::string::npos, "a WAV longer than the limit is refused");
+    w = wav(22050, 1, 16, std::vector<int>(MaxSoundBytes / 2));
+    check(decode_wav(w.data(), w.size(), out, error) && out.size() == MaxSoundBytes, "a WAV exactly at the limit is accepted");
+}
+
+void audio_pack_tests() {
+    std::string error;
+    Description d;
+    d.nodes.push_back(node(1, -1, NodeType::Node, "Main"));
+    auto player = node(2, 0, NodeType::AudioStreamPlayer, "Shot");
+    player.extras().sound = 0; player.extras().volume_db = -3; player.extras().loop = true; player.extras().autoplay = false;
+    d.nodes.push_back(player);
+    SoundAsset sound; sound.path = "res://shot.wav"; sound.frames = 2; sound.bytes = pcm({1000, -1000});
+    d.sounds.push_back(sound);
+    const auto bytes = encode_pack(d, error);
+    check(!bytes.empty(), "a package with a sound encodes");
+    Description copy;
+    check(decode_pack(bytes.data(), bytes.size(), copy, error, false), "a package with a sound decodes");
+    check(copy.sounds.size() == 1 && copy.sounds[0].path == "res://shot.wav" && copy.sounds[0].frames == 2
+          && copy.sounds[0].bytes == sound.bytes && !copy.sounds[0].packed, "the sound survives the round trip");
+    check(copy.nodes[1].type == NodeType::AudioStreamPlayer && copy.nodes[1].more().sound == 0
+          && copy.nodes[1].more().volume_db == -3 && copy.nodes[1].more().loop && !copy.nodes[1].more().autoplay, "the node's fields survive");
+    Description in_place;
+    check(decode_pack(bytes.data(), bytes.size(), in_place, error, false, true) && in_place.sounds[0].bytes.empty()
+          && in_place.sounds[0].packed >= bytes.data() && in_place.sounds[0].packed < bytes.data() + bytes.size()
+          && encode_pack(in_place, error) == bytes, "sounds can stay in the package and save identically");
+    d.nodes[1].extras().sound = 1;
+    check(!Runtime().load(d, error), "a sound index out of range is refused");
+    d.nodes[1].extras().sound = 0;
+    d.sounds[0].frames = 3;
+    check(!Runtime().load(d, error), "a sound whose frames don't match its bytes is refused");
+    d.sounds[0].frames = 2;
+    d.nodes[1].extras().volume_db = 5;
+    check(!Runtime().load(d, error), "volume_db above 0 is refused");
+    // Bad data in the package: patch a valid one.
+    {
+        const std::string key = "res://shot.wav";
+        const auto at = std::search(bytes.begin(), bytes.end(), key.begin(), key.end()) - bytes.begin() + key.size();
+        auto with_frames = [&](uint32_t frames) {
+            auto b = bytes;
+            for (int i = 0; i < 4; ++i) b[at + i] = uint8_t(frames >> (8 * i));
+            return b;
+        };
+        Description bad;
+        for (uint32_t frames : {0u, 0x80000000u, 0xFFFFFFFFu}) {
+            const auto b = with_frames(frames);
+            check(!decode_pack(b.data(), b.size(), bad, error) && error.find("sound") != std::string::npos,
+                  "a package with zero or oversized sound frames is refused");
+        }
+        check(!decode_pack(bytes.data(), at + 4 + 2, bad, error), "a package cut inside the sound data is refused");
+        auto looped = bytes;
+        size_t loop_at = 0;
+        for (size_t i = at + 8; i + 1 < looped.size(); ++i) // find volume -3.0f (00 00 40 C0) followed by loop = 1
+            if (looped[i] == 0xC0 && looped[i - 1] == 0x40 && looped[i - 2] == 0 && looped[i - 3] == 0 && looped[i + 1] == 1) loop_at = i + 1;
+        check(loop_at != 0, "found the loop byte");
+        if (loop_at) {
+            looped[loop_at] = 2;
+            check(!decode_pack(looped.data(), looped.size(), bad, error), "a loop byte of 2 is refused");
+        }
+    }
+    {
+        Description many = d;
+        many.nodes[1].extras().volume_db = 0;
+        many.sounds.assign(33, sound);
+        check(!Runtime().load(many, error) && error.find("sounds") != std::string::npos, "33 sounds are refused");
+        Description big = d;
+        big.nodes[1].extras().volume_db = 0;
+        big.sounds.clear();
+        for (int i = 0; i < 2; ++i) {
+            SoundAsset s; s.path = "res://big.wav"; s.frames = uint32_t(MaxSoundBytes / 2 / 2 + 1);
+            s.bytes.assign(size_t(s.frames) * 2, 0);
+            big.sounds.push_back(s);
+        }
+        big.nodes[1].extras().sound = 0;
+        check(!Runtime().load(big, error) && error.find("sound") != std::string::npos, "sounds over the total limit are refused");
+        Description nan = d;
+        nan.nodes[1].extras().volume_db = std::nanf("");
+        check(!Runtime().load(nan, error) && error.find("volume") != std::string::npos, "a NaN volume is refused");
+        Description huge = d;
+        huge.nodes[1].extras().volume_db = 0;
+        huge.sounds[0].frames = 0x80000000u;
+        check(!Runtime().load(huge, error) && error.find("sound") != std::string::npos, "huge frame counts are refused by validate");
+    }
+    // A package of the previous format asks for a new export.
+    auto old = bytes; old[4] = 17;
+    check(!decode_pack(old.data(), old.size(), copy, error, false) && error.find("export the project again") != std::string::npos, "version 17 is refused");
+}
+
+void audio_script_tests() {
+    auto logged = [](const std::vector<std::string>& log, const std::string& line) { return std::count(log.begin(), log.end(), line); };
+    auto scene_with = [](const char* source, bool autoplay, int32_t sound) {
+        Description d;
+        d.nodes.push_back(node(1, -1, NodeType::Node, "Main"));
+        auto player = node(2, 0, NodeType::AudioStreamPlayer, "Sfx");
+        player.extras().sound = sound; player.extras().autoplay = autoplay;
+        d.nodes.push_back(player);
+        if (sound >= 0) {
+            SoundAsset s; s.path = "res://a.wav"; s.frames = 22050; s.bytes = std::vector<uint8_t>(44100, 16);
+            d.sounds.push_back(s);
+        }
+        d.nodes[0].script = 0;
+        d.scripts.push_back({"res://main.jet", source, {}});
+        return d;
+    };
+    {   // play, is_playing, stop, and the properties.
+        static AudioMixer mixer;
+        Runtime r;
+        r.set_audio(&mixer);
+        check(start_scene(r, scene_with("extends Node\nfunc _ready():\n\tprint(\"a \", $Sfx.is_playing())\n\t$Sfx.volume_db = -6.0\n\t$Sfx.loop = true\n"
+            "\t$Sfx.play()\n\tprint(\"b \", $Sfx.is_playing(), \" \", $Sfx.volume_db, \" \", $Sfx.loop)\n\t$Sfx.stop()\n\tprint(\"c \", $Sfx.is_playing())\n", false, 0)), "sound scene starts");
+        simulate(r, 0.1f);
+        const auto log = run_log(r);
+        check(logged(log, "a false") == 1 && logged(log, "b true -6.0 true") == 1 && logged(log, "c false") == 1, "play, is_playing, stop and properties work");
+    }
+    {   // Autoplay starts at entering the tree.
+        static AudioMixer mixer;
+        Runtime r;
+        r.set_audio(&mixer);
+        check(start_scene(r, scene_with("extends Node\n", true, 0)), "autoplay scene starts");
+        check(mixer.is_playing(2), "autoplay plays the sound");
+    }
+    {   // Freeing the node silences it.
+        static AudioMixer mixer;
+        Runtime r;
+        r.set_audio(&mixer);
+        check(start_scene(r, scene_with("extends Node\nfunc _ready():\n\t$Sfx.play()\n\t$Sfx.queue_free()\n", false, 0)), "freeing scene starts");
+        simulate(r, 0.1f);
+        check(!mixer.is_playing(2), "a freed node stops its sound");
+    }
+    {   // Without an output: silent, is_playing false, one notice and no error.
+        Runtime r;
+        check(start_scene(r, scene_with("extends Node\nfunc _ready():\n\t$Sfx.play()\n\t$Sfx.play()\n\tprint(\"m \", $Sfx.is_playing())\n", false, 0)), "scene without output starts");
+        simulate(r, 0.1f);
+        const auto log = run_log(r);
+        check(logged(log, "m false") == 1, "is_playing is false without an output");
+        check(std::count_if(log.begin(), log.end(), [](const std::string& l) { return l.find("no audio output") != std::string::npos; }) == 1, "the silence is reported once");
+    }
+    {   // An empty stream logs an error and does nothing else.
+        static AudioMixer mixer;
+        Runtime r;
+        r.set_audio(&mixer);
+        check(start_scene(r, scene_with("extends Node\nfunc _ready():\n\t$Sfx.play()\n\tprint(\"after\")\n", false, -1)), "empty stream scene starts");
+        simulate(r, 0.1f);
+        const auto log = run_log(r);
+        check(logged(log, "after") == 1 && std::count_if(log.begin(), log.end(), [](const std::string& l) { return l.find("no stream") != std::string::npos; }) == 1, "play without a stream logs and goes on");
+    }
+    {   // A scene change stops what plays, also from an instanced node.
+        static AudioMixer mixer;
+        auto any_playing = [&] {
+            for (uint32_t id = 1; id < 64; ++id) if (mixer.is_playing(id)) return true;
+            for (uint32_t id = InstanceIdBase; id < InstanceIdBase + 64; ++id) if (mixer.is_playing(id)) return true;
+            return false;
+        };
+        Description d = scene_with("extends Node\nvar frames := 0\nfunc _ready():\n\t$Sfx.play()\n"
+            "\tvar s = preload(\"res://spawn.jetscene\").instantiate()\n\tadd_child(s)\n"
+            "func _process(delta):\n\tframes += 1\n\tif frames == 3:\n\t\tget_tree().change_scene_to_file(\"res://level.jetscene\")\n", false, 0);
+        d.path = "res://main.jetscene";
+        SceneDesc spawn;
+        spawn.path = "res://spawn.jetscene";
+        spawn.nodes.push_back(node(1, -1, NodeType::Node, "Spawn"));
+        auto inst = node(2, 0, NodeType::AudioStreamPlayer, "InstSfx");
+        inst.extras().sound = 0; inst.extras().autoplay = true;
+        spawn.nodes.push_back(inst);
+        SceneDesc level;
+        level.path = "res://level.jetscene";
+        level.nodes.push_back(node(1, -1, NodeType::Node, "Level"));
+        d.scenes.push_back(spawn);
+        d.scenes.push_back(level);
+        Runtime r;
+        r.set_audio(&mixer);
+        check(start_scene(r, d), "scene-change sound scene starts");
+        r.update(1.0f / 60);
+        check(mixer.is_playing(2) && any_playing(), "the sound plays before the change");
+        bool instanced = false;
+        for (uint32_t id = InstanceIdBase; id < InstanceIdBase + 64; ++id) instanced = instanced || mixer.is_playing(id);
+        check(instanced, "the instanced node plays too");
+        for (int i = 0; i < 4; ++i) r.update(1.0f / 60);
+        check(r.current_scene() == "res://level.jetscene" && !mixer.is_playing(2) && !any_playing(), "change_scene stops every sound");
+    }
+}
+
 int main(int argc, char** argv) {
     std::string error;
     bytecode_tests();
@@ -1896,8 +2221,12 @@ int main(int argc, char** argv) {
     twod_tests();
     physics2d_tests();
     signal_tests();
+    audio_script_tests();
     tween_tests();
     animation_player_tests();
+    audio_mixer_tests();
+    wav_tests();
+    audio_pack_tests();
     Runtime runtime;
     const Description base = scene();
     check(runtime.load(base, error), "valid scene loads");
@@ -2155,5 +2484,5 @@ int main(int argc, char** argv) {
     }
 
     if (failures) { std::cerr << failures << " runtime test(s) failed\n"; return 1; }
-    std::cout << "PASS: hierarchy, Godot transforms, validation, picking, scripts, input, queue_free, errors, bytecode, textures, materials, sky, OBJ import, quantization, Quad/Torus, reflections, 2D nodes, draw order, resolution, physics, particles, input map, scenes, autoloads, Sprite3D, plain Control, slim nodes, RAM estimate, instantiate, 2D nodes, 2D physics, signals, Timer, scene connections, tweens, AnimationPlayer, pack v17\n";
+    std::cout << "PASS: hierarchy, Godot transforms, validation, picking, scripts, input, queue_free, errors, bytecode, textures, materials, sky, OBJ import, quantization, Quad/Torus, reflections, 2D nodes, draw order, resolution, physics, particles, input map, scenes, autoloads, Sprite3D, plain Control, slim nodes, RAM estimate, instantiate, 2D nodes, 2D physics, signals, Timer, scene connections, tweens, AnimationPlayer, pack v18\n";
 }

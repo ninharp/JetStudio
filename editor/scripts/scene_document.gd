@@ -4,7 +4,7 @@ extends RefCounted
 const VERSION := 2
 const TYPES := ["Node", "Node3D", "MeshInstance3D", "Sprite3D", "Camera3D", "DirectionalLight3D", "WorldEnvironment",
 	"Node2D", "Sprite2D", "AnimatedSprite2D", "Camera2D", "StaticBody2D", "CharacterBody2D", "RigidBody2D", "Area2D", "CollisionShape2D", "Control", "Label", "TextureRect", "ColorRect", "StaticBody3D", "CharacterBody3D", "RigidBody3D", "Area3D", "CollisionShape3D",
-	"CPUParticles3D", "Timer", "AnimationPlayer"]
+	"CPUParticles3D", "Timer", "AnimationPlayer", "AudioStreamPlayer"]
 const BASE := {"Node": "", "Node3D": "Node", "MeshInstance3D": "Node3D", "Camera3D": "Node3D",
 	"DirectionalLight3D": "Node3D", "WorldEnvironment": "Node", "Control": "Node", "Label": "Control",
 	"TextureRect": "Control", "ColorRect": "Control", "CollisionObject3D": "Node3D", "PhysicsBody3D": "CollisionObject3D",
@@ -13,7 +13,7 @@ const BASE := {"Node": "", "Node3D": "Node", "MeshInstance3D": "Node3D", "Camera
 	"Node2D": "Node", "Sprite2D": "Node2D", "AnimatedSprite2D": "Node2D", "Camera2D": "Node2D",
 	"CollisionObject2D": "Node2D", "PhysicsBody2D": "CollisionObject2D", "StaticBody2D": "PhysicsBody2D",
 	"CharacterBody2D": "PhysicsBody2D", "RigidBody2D": "PhysicsBody2D", "Area2D": "CollisionObject2D", "CollisionShape2D": "Node2D",
-	"Timer": "Node", "AnimationPlayer": "Node"}
+	"Timer": "Node", "AnimationPlayer": "Node", "AudioStreamPlayer": "Node"}
 ## Base classes shown in the class tree but not instantiable.
 const ABSTRACT := ["CollisionObject3D", "PhysicsBody3D", "CollisionObject2D", "PhysicsBody2D"]
 const BODIES := ["StaticBody3D", "CharacterBody3D", "RigidBody3D", "Area3D", "StaticBody2D", "CharacterBody2D", "RigidBody2D", "Area2D"]
@@ -50,6 +50,7 @@ const DESCRIPTIONS := {
 	"CPUParticles3D": "Emits particles (sparks, splashes, fountains) drawn by Jet's particle system. Visible in Play.",
 	"AnimationPlayer": "Plays animations of the properties of the nodes around it, and calls their methods at given times. Edit them in the Animation panel at the bottom; the key icons in the Inspector add keys.",
 	"Timer": "Counts down Wait Time and emits timeout: connect it in the Signals dock, or in a script ($Timer.timeout.connect(_on_timeout)). One Shot stops after the first time.",
+	"AudioStreamPlayer": "Plays a WAV file on the device with play(); silent in the editor. Up to 4 sounds at once; a fifth replaces the oldest. Converted to mono 22 kHz 16 bit on export.",
 }
 const MESHES := ["Box", "Sphere", "Plane", "Pyramid", "Cylinder", "Capsule", "Quad", "Torus", "File"]
 const MESH_ICONS := {"Box": "BoxMesh", "Sphere": "SphereMesh", "Plane": "PlaneMesh", "Pyramid": "PrismMesh",
@@ -57,6 +58,7 @@ const MESH_ICONS := {"Box": "BoxMesh", "Sphere": "SphereMesh", "Plane": "PlaneMe
 const SHADING := ["Gouraud", "Flat", "Unlit", "Phong", "Additive", "Water"]
 const IMAGE_EXTENSIONS := ["png"]
 const MODEL_EXTENSIONS := ["obj"]
+const SOUND_EXTENSIONS := ["wav"]
 ## Bitmap font cell of the runtime (runtime/font_data.hpp), for 2D gizmos.
 const FONT_SIZE := Vector2i(7, 15)
 const SCREEN := Vector2i(320, 240)
@@ -271,6 +273,13 @@ const PROPERTIES := {
 		{"key": "one_shot", "type": "bool", "default": false, "tooltip": "Stops after the first timeout; otherwise it starts again."},
 		{"key": "autostart", "type": "bool", "default": false, "tooltip": "Starts when the scene starts (or when the node enters the tree)."},
 	],
+	"AudioStreamPlayer": [
+		{"key": "stream", "type": "sound", "default": ""},
+		{"key": "volume_db", "label": "Volume", "type": "float", "default": 0.0, "min": -80.0, "max": 0.0, "step": 0.1, "suffix": "dB",
+			"tooltip": "Relative to the board's limit. Takes effect at the next play()."},
+		{"key": "autoplay", "type": "bool", "default": false, "tooltip": "Starts when the node enters the tree."},
+		{"key": "loop", "type": "bool", "default": false, "tooltip": "Repeats until stop()."},
+	],
 	"CPUParticles3D": [
 		{"key": "emitting", "type": "bool", "default": true, "tooltip": "Emits particles (with One Shot, turns false at the end of the cycle)."},
 		{"key": "amount", "type": "int", "default": 8, "min": 1, "max": 200,
@@ -456,7 +465,7 @@ static func property_visible(prop: Dictionary, node: Dictionary) -> bool:
 	return true
 
 ## Node keys holding res:// paths (renamed together with the files).
-const PATH_KEYS := ["script", "albedo_texture", "sky_texture", "texture", "mesh_file"]
+const PATH_KEYS := ["script", "albedo_texture", "sky_texture", "texture", "mesh_file", "stream"]
 
 ## res:// paths of every texture used by a document (albedo, sky, TextureRect).
 static func texture_paths(root: Dictionary) -> Array:
@@ -472,6 +481,13 @@ static func model_paths(root: Dictionary) -> Array:
 	walk(root, func(n, _p, _d):
 		var path := str(n.get("mesh_file", ""))
 		if str(n.get("mesh", "")) == "File" and not path.is_empty() and not path in paths: paths.append(path))
+	return paths
+
+static func sound_paths(root: Dictionary) -> Array:
+	var paths := []
+	walk(root, func(n, _p, _d):
+		var path := str(n.get("stream", ""))
+		if not path.is_empty() and not path in paths: paths.append(path))
 	return paths
 
 ## Top-left corner of a Control in screen pixels (Control parents add up, as in Godot).

@@ -166,6 +166,7 @@ const char* node_type_name(NodeType type) {
     case NodeType::CollisionShape2D: return "CollisionShape2D";
     case NodeType::Timer: return "Timer";
     case NodeType::AnimationPlayer: return "AnimationPlayer";
+    case NodeType::AudioStreamPlayer: return "AudioStreamPlayer";
     }
     return "Node";
 }
@@ -186,7 +187,7 @@ bool is_node2d(NodeType type) {
 }
 bool is_node3d(NodeType type) {
     return type != NodeType::Node && type != NodeType::WorldEnvironment && type != NodeType::Timer
-        && type != NodeType::AnimationPlayer && !is_control(type) && !is_node2d(type);
+        && type != NodeType::AnimationPlayer && type != NodeType::AudioStreamPlayer && !is_control(type) && !is_node2d(type);
 }
 uint16_t rgb565(uint32_t c) { return uint16_t(((c >> 19) & 31) << 11 | ((c >> 10) & 63) << 5 | ((c >> 3) & 31)); }
 
@@ -227,6 +228,14 @@ bool validate(const Description& d, std::string& error) {
         texture_bytes += t.bytes();
     }
     if (texture_bytes > MaxTextureBytes) return fail("Textures exceed 4 MiB in total.");
+    if (d.sounds.size() > MaxSounds) return fail("At most 32 sounds per project.");
+    size_t sound_bytes = 0;
+    for (const auto& s : d.sounds) {
+        if (!s.frames || s.frames > MaxSoundBytes / 2) return fail("Invalid sound " + s.path + " (at most 2 MB of sound per project).");
+        sound_bytes += size_t(s.frames) * 2;
+        if ((!s.packed && s.bytes.size() != size_t(s.frames) * 2) || sound_bytes > MaxSoundBytes)
+            return fail("Invalid sound " + s.path + " (at most 2 MB of sound per project).");
+    }
     auto texture_ok = [&](int32_t i) { return i >= -1 && (i < 0 || size_t(i) < d.textures.size()); };
     if (d.meshes.size() > MaxMeshAssets) return fail("At most 128 models per scene.");
     size_t total_vertices = 0;
@@ -265,7 +274,12 @@ bool validate(const Description& d, std::string& error) {
             if (!n.id || n.id >= InstanceIdBase || !ids.insert(n.id).second) return fail("Duplicate or null node identifier.");
             if (!valid_name(n.name)) return fail("Invalid node name: \"" + n.name + "\" (1..80 characters, without . : @ / \" %).");
             if (!siblings.insert(std::to_string(n.parent) + "/" + n.name).second) return fail("Two sibling nodes have the same name: " + n.name);
-            if (uint8_t(n.type) > uint8_t(NodeType::AnimationPlayer)) return fail("Unsupported node type.");
+            if (uint8_t(n.type) > uint8_t(NodeType::AudioStreamPlayer)) return fail("Unsupported node type.");
+            if (n.type == NodeType::AudioStreamPlayer) {
+                const auto& e = n.more();
+                if (e.sound < -1 || e.sound >= int32_t(d.sounds.size())) return fail("Invalid sound in " + n.name + ".");
+                if (!std::isfinite(e.volume_db) || e.volume_db < -80 || e.volume_db > 0) return fail("Invalid volume in " + n.name + " (-80 to 0 dB).");
+            }
             if (n.type == NodeType::AnimationPlayer) {
                 const auto& animations = n.more().player_animations;
                 if (animations.size() > MaxAnimations) return fail("At most 64 animations in " + n.name + ".");
@@ -488,9 +502,9 @@ size_t Runtime::node_bytes() const {
     return bytes;
 }
 
-bool Runtime::load_pack(const uint8_t* data, size_t size, std::string& error, bool textures_in_place) {
+bool Runtime::load_pack(const uint8_t* data, size_t size, std::string& error, bool textures_in_place, bool sounds_in_place) {
     Description d;
-    if (!decode_pack(data, size, d, error, textures_in_place) || !load(std::move(d), error)) return false;
+    if (!decode_pack(data, size, d, error, textures_in_place, sounds_in_place) || !load(std::move(d), error)) return false;
     pack_ = data;
     pack_size_ = size;
     // Every scene was validated while decoding; the built one now lives in nodes_.
@@ -524,6 +538,7 @@ const std::vector<NodeDesc>* Runtime::nodes_of(std::string_view path, std::vecto
 
 bool Runtime::build(std::string& error) {
     error.clear();
+    if (audio_) audio_->stop_all(); // scene changes and stop() rebuild
     // The scene only borrows the objects, so drop its pointers first.
     scene_.getObjects().clear();
     objects_.clear();
@@ -624,6 +639,7 @@ void Runtime::create_visual(int32_t index) {
 
 // Frees what a freed node holds outside nodes_: its script, Jet object, material, texture and particles.
 void Runtime::release_node(Live& n) {
+    if (n.d.type == NodeType::AudioStreamPlayer && audio_) audio_->stop(n.d.id);
     if (vm_->has_instance(n.d.id)) vm_->detach(n.d.id);
     vm_->forget(n.d.id);
     if (n.object) {
@@ -958,6 +974,18 @@ void Runtime::set_editor_camera(Vec3 position, Vec3 rotation, float fov) {
     editor_fov_ = std::clamp(fov, 1.0f, 179.0f);
 }
 
+void Runtime::play_sound(Live& n) {
+    const auto& e = n.d.more();
+    if (!audio_) {
+        if (!audio_notice_) log("no audio output here: sounds are silent", false);
+        audio_notice_ = true;
+        return;
+    }
+    if (e.sound < 0) { log("AudioStreamPlayer " + n.d.name + " has no stream.", true); return; }
+    const auto& s = description_.sounds[size_t(e.sound)];
+    audio_->play(n.d.id, s.data(), s.frames, e.volume_db, e.loop);
+}
+
 void Runtime::log(std::string text, bool error, std::string path, int line) {
     if (log_.size() >= 512) log_.erase(log_.begin(), log_.begin() + 256);
     log_.push_back({std::move(text), error, std::move(path), line});
@@ -1259,6 +1287,7 @@ void Runtime::enter_tree(int32_t root) {
             if (playing_ && n.d.type == NodeType::Timer && n.d.more().autoplay && !n.d.more().playing) start_timer(n);
             if (playing_ && n.d.type == NodeType::AnimationPlayer && !n.d.more().animation.empty() && !n.d.more().playing)
                 play_player(n, n.d.more().animation, 1, false);
+            if (playing_ && n.d.type == NodeType::AudioStreamPlayer && n.d.more().autoplay) play_sound(n);
         }
         if (child < n.children.size()) {
             const int32_t next = n.children[child++];

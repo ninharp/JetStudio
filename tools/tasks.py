@@ -20,14 +20,16 @@ def generate_scene(pack, firmware):
     if len(data) < 12 or data[:4] != b"JETP":
         raise RuntimeError("Not a .jetpack file: export the project again")
     version = struct.unpack_from("<I", data, 4)[0]
-    if version < 17:
+    if version < 18:
         # The editor exports with the bridge it loaded at startup, so an old version means a stale editor.
-        raise RuntimeError(f"The package is version {version}, the firmware reads version 17: Jet Studio was updated "
+        raise RuntimeError(f"The package is version {version}, the firmware reads version 18: Jet Studio was updated "
                            "while it was running. Restart Jet Studio and build again")
-    if version != 17:
-        raise RuntimeError(f"Unknown .jetpack version {version} (expected 17): update Jet Studio")
-    if len(data) > 1024 * 1024:
-        raise RuntimeError("Scene package larger than 1 MiB")
+    if version != 18:
+        raise RuntimeError(f"Unknown .jetpack version {version} (expected 18): update Jet Studio")
+    # ESP32: 3 MB app partition, code about 750 KB. STM32 keeps 1 MiB (flash is shared with the code).
+    limit = 2304 * 1024 if firmware == hardware.FIRMWARE else 1024 * 1024
+    if len(data) > limit:
+        raise RuntimeError(f"Scene package larger than {limit / 1024 / 1024:g} MiB")
     lines = ["#pragma once", "// Generated from the editor scene. Do not edit.", "#include <cstdint>",
              "static constexpr uint8_t scene_data[] = {"]
     for offset in range(0, len(data), 16):

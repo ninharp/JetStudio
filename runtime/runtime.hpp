@@ -1,6 +1,7 @@
 #pragma once
 #include "Math.hpp" // Jet's Vec3f
 #include "Scene.hpp"
+#include "audio_mixer.hpp"
 #include "jetscript.hpp"
 #include "math3d.hpp"
 #include <algorithm>
@@ -20,7 +21,7 @@ constexpr int DefaultWidth = 320, DefaultHeight = 240;
 constexpr int MinScreenSide = 64, MaxScreenWidth = 800, MaxScreenHeight = 480;
 // Desktop draws every pixel; the device draws half-width interlaced fields like JetExamples (firmware/config/JetConfig.hpp).
 constexpr int BufferColumnStep = HALF_WIDTH_BUFFERS ? 2 : 1, BufferRowStep = FIELD_BUFFERS ? 2 : 1;
-constexpr size_t MaxNodes = 256, MaxMeshes = 128, MaxScripts = 64, MaxTextures = 64;
+constexpr size_t MaxNodes = 256, MaxMeshes = 128, MaxScripts = 64, MaxTextures = 64, MaxSounds = 32;
 constexpr size_t MaxScriptBytes = 256 * 1024;
 constexpr int MaxTextureSide = 1024;
 constexpr size_t MaxMeshAssets = 128, MaxMeshVertices = 65535, MaxSceneVertices = 262144, MaxText = 512;
@@ -31,7 +32,7 @@ enum class NodeType : uint8_t { Node, Node3D, MeshInstance3D, Camera3D, Directio
                                 Label, TextureRect, ColorRect,
                                 StaticBody3D, CharacterBody3D, RigidBody3D, Area3D, CollisionShape3D, CPUParticles3D, Sprite3D, Control,
                                 Node2D, Sprite2D, AnimatedSprite2D, Camera2D,
-                                StaticBody2D, CharacterBody2D, RigidBody2D, Area2D, CollisionShape2D, Timer, AnimationPlayer };
+                                StaticBody2D, CharacterBody2D, RigidBody2D, Area2D, CollisionShape2D, Timer, AnimationPlayer, AudioStreamPlayer };
 // Godot's BoxShape3D, SphereShape3D, CapsuleShape3D; in 2D RectangleShape2D, CircleShape2D, CapsuleShape2D.
 enum class CollisionKind : uint8_t { Box, Sphere, Capsule };
 // Primitives use Godot's default mesh sizes (BoxMesh 1 m, SphereMesh r 0.5...). Mesh is an imported model part.
@@ -49,6 +50,15 @@ enum class CullMode : uint8_t { Back, Front, Disabled };
 enum class DrawOrder : uint8_t { Default, Background, OnTop };
 // Gradient follows the camera pitch like Godot's ProceduralSkyMaterial. Panorama is equirectangular.
 enum class Background : uint8_t { Color, Gradient, Panorama };
+
+// Mono, 16 bit little endian at AudioSampleRate. On the device it stays in the package (packed).
+struct SoundAsset {
+    std::string path;
+    uint32_t frames = 0;
+    std::vector<uint8_t> bytes;
+    const uint8_t* packed = nullptr;
+    const uint8_t* data() const { return packed ? packed : bytes.data(); }
+};
 
 // RGB565 pixels, or 8-bit palette indices when the image has at most 256 colours (lossless, half the memory).
 struct TextureAsset {
@@ -317,6 +327,10 @@ struct NodeExtras {
     int16_t player_current = -1;
     bool player_fresh = false; // just started: keys at its first instant fire too
     float player_speed = 1;
+    // AudioStreamPlayer: autoplay is shared with the sprites.
+    int32_t sound = -1;
+    float volume_db = 0;
+    bool loop = false;
 };
 
 // ints stay ints; vectors and colours go per component
@@ -418,6 +432,7 @@ struct Description {
     std::vector<Autoload> autoloads;
     std::vector<ScriptFile> scripts;
     std::vector<TextureAsset> textures;
+    std::vector<SoundAsset> sounds;
     std::vector<MeshAsset> meshes;
 };
 bool validate(const Description&, std::string& error);
@@ -473,7 +488,7 @@ public:
     // An exported package that outlives the runtime (flash on the device): only the scene being played stays
     // in RAM, the others are read again from the package when entered.
     // textures_in_place: palette textures are read from the package, not copied (boards without PSRAM).
-    bool load_pack(const uint8_t* data, size_t size, std::string& error, bool textures_in_place = false);
+    bool load_pack(const uint8_t* data, size_t size, std::string& error, bool textures_in_place = false, bool sounds_in_place = false);
     // Compiles scripts and runs _ready(). On compile errors nothing runs.
     bool start(std::vector<ScriptDiagnostic>& errors);
     void stop(); // back to the authored state
@@ -502,6 +517,7 @@ public:
     // corner) at `zoom`. Controls sit on the screen rectangle at the canvas origin, as Godot shows a CanvasLayer.
     void set_editor_canvas(bool enabled, float zoom = 1, Vec3 origin = {});
     int pick(int x, int y); // node id or -1
+    void set_audio(AudioMixer* mixer) { audio_ = mixer; } // null: sounds are silent (editor, boards without audio)
     void set_input(uint32_t pressed); // bit i = Description::actions[i]
     // Deferred to the end of the frame, like Godot. False if the package lacks the scene.
     bool change_scene(std::string_view path);
@@ -660,6 +676,9 @@ private:
     void start_tweener(Tweener& tw);
     void apply_tweener(Tweener& tw, float progress);
     void kill_tweens(bool keep_autoloads);
+    void play_sound(Live& n);
+    AudioMixer* audio_ = nullptr;
+    bool audio_notice_ = false;
     bool play_player(Live& n, std::string_view name, float speed, bool from_end);
     void stop_player(Live& n, bool keep_state);
     void seek_player(Live& n, float time, bool update);
@@ -778,7 +797,7 @@ private:
 // Packages carry bytecode only, no script source.
 std::vector<uint8_t> encode_pack(const Description&, std::string& error);
 #endif
-bool decode_pack(const uint8_t*, size_t, Description&, std::string& error, bool textures_in_place = false);
+bool decode_pack(const uint8_t*, size_t, Description&, std::string& error, bool textures_in_place = false, bool sounds_in_place = false);
 bool pack_resolution(const uint8_t*, size_t, int& width, int& height); // header only
 // One scene's nodes and connections, read again from the package at SceneDesc::offset or Description::nodes_offset.
 bool decode_nodes(const uint8_t*, size_t, uint32_t offset, std::vector<NodeDesc>&, std::vector<SceneConnection>&,

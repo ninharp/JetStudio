@@ -6,7 +6,7 @@
 // Scripts travel as bytecode so devices only need the VM. Everything is validated again after decoding.
 namespace jetstudio {
 namespace {
-constexpr uint32_t Magic = 0x5054454a, Version = 17;
+constexpr uint32_t Magic = 0x5054454a, Version = 18;
 
 struct Writer {
     std::vector<uint8_t> out;
@@ -136,6 +136,11 @@ std::vector<uint8_t> encode_pack(const Description& d, std::string& error) {
         if (t.palette.empty()) for (uint16_t c : t.pixels) w.u16(c);
         else w.out.insert(w.out.end(), t.index_data(), t.index_data() + size_t(t.width) * t.height);
     }
+    w.u32(uint32_t(d.sounds.size()));
+    for (const auto& s : d.sounds) {
+        w.str(s.path); w.u32(s.frames);
+        w.out.insert(w.out.end(), s.data(), s.data() + size_t(s.frames) * 2);
+    }
     w.u32(uint32_t(d.meshes.size()));
     for (const auto& m : d.meshes) {
         w.str(m.path);
@@ -187,6 +192,7 @@ std::vector<uint8_t> encode_pack(const Description& d, std::string& error) {
                     }
                 }
             }
+            w.u32(uint32_t(n.more().sound)); w.f32(n.more().volume_db); w.u8(n.more().loop ? 1 : 0);
             w.u32(uint32_t(n.script));
             w.u32(uint32_t(n.overrides.size()));
             for (const auto& o : n.overrides) {
@@ -304,9 +310,13 @@ static bool read_nodes(Reader& r, std::vector<NodeDesc>& nodes, std::vector<Scen
             }
             e.player_animations.push_back(std::move(a));
         }
+        e.sound = int32_t(r.u32()); e.volume_db = r.f32();
+        const uint8_t sound_loop = r.u8();
+        e.loop = sound_loop == 1;
+        if (sound_loop > 1) r.ok = false;
         n.script = int32_t(r.u32());
         const uint32_t overrides = r.u32();
-        if (type > uint8_t(NodeType::AnimationPlayer) || shape > uint8_t(Shape::Mesh) || shading > uint8_t(Shading::Water)
+        if (type > uint8_t(NodeType::AudioStreamPlayer) || shape > uint8_t(Shape::Mesh) || shading > uint8_t(Shading::Water)
             || cull > uint8_t(CullMode::Disabled) || draw_order > uint8_t(DrawOrder::OnTop)
             || background > uint8_t(Background::Panorama) || flags > 31
             || visible > 1 || current > 1 || overrides > 256) { error = "Invalid node in the package."; return false; }
@@ -336,11 +346,11 @@ static bool read_nodes(Reader& r, std::vector<NodeDesc>& nodes, std::vector<Scen
     return true;
 }
 
-bool decode_pack(const uint8_t* data, size_t size, Description& out, std::string& error, bool textures_in_place) {
+bool decode_pack(const uint8_t* data, size_t size, Description& out, std::string& error, bool textures_in_place, bool sounds_in_place) {
     error.clear();
     if (!data || size < 12) { error = "Truncated package."; return false; }
     Reader r{data, size};
-    if (r.u32() != Magic || r.u32() != Version) { error = "Unsupported JETP format (expected version 17): export the project again."; return false; }
+    if (r.u32() != Magic || r.u32() != Version) { error = "Unsupported JETP format (expected version 18): export the project again."; return false; }
     Description d;
     d.name = r.str(256);
     d.width = r.u16();
@@ -391,6 +401,23 @@ bool decode_pack(const uint8_t* data, size_t size, Description& out, std::string
             for (size_t k = 0; k < count && r.ok; ++k) t.pixels[k] = r.u16();
         }
         d.textures.push_back(std::move(t));
+    }
+    const uint32_t sounds = r.u32();
+    if (sounds > MaxSounds) { error = "Too many sounds in the package."; return false; }
+    size_t sound_bytes = 0;
+    for (uint32_t i = 0; i < sounds && r.ok; ++i) {
+        SoundAsset s;
+        s.path = r.str(512);
+        s.frames = r.u32();
+        if (!s.frames || s.frames > MaxSoundBytes / 2) { error = "Invalid sound in the package."; return false; }
+        const size_t bytes = size_t(s.frames) * 2;
+        sound_bytes += bytes;
+        if (sound_bytes > MaxSoundBytes) { error = "Invalid sound in the package."; return false; }
+        if (!r.take(bytes)) break;
+        if (sounds_in_place) s.packed = r.p;
+        else s.bytes.assign(r.p, r.p + bytes);
+        r.p += bytes; r.remaining -= bytes;
+        d.sounds.push_back(std::move(s));
     }
     const uint32_t meshes = r.u32();
     if (meshes > MaxMeshAssets) { error = "Too many models in the package."; return false; }

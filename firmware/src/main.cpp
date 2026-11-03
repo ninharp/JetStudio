@@ -15,6 +15,52 @@
 #include <algorithm>
 #include <cstring>
 
+#if JET_AUDIO
+#include <driver/i2s_std.h>
+#include <atomic>
+#include "audio_mixer.hpp"
+
+// Core 0: mixes a block and hands it to the I2S DMA, which blocks until there is room, so it sleeps most of the time.
+namespace audio {
+constexpr size_t BlockFrames = 256;
+jetstudio::AudioMixer mixer;
+i2s_chan_handle_t channel = nullptr;
+std::atomic<uint32_t> mix_max_us{0}; // the longest block since the last log line
+
+void loop(void*) {
+    static int16_t block[BlockFrames];
+    for (;;) {
+        const int64_t start = esp_timer_get_time();
+        mixer.mix(block, BlockFrames);
+        const auto took = uint32_t(esp_timer_get_time() - start);
+        if (took > mix_max_us.load(std::memory_order_relaxed)) mix_max_us.store(took, std::memory_order_relaxed);
+        size_t written = 0;
+        if (i2s_channel_write(channel, block, sizeof block, &written, portMAX_DELAY) != ESP_OK) vTaskDelay(1);
+    }
+}
+
+bool start() {
+    i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+    chan.dma_desc_num = 4;
+    chan.dma_frame_num = BlockFrames;
+    chan.auto_clear_after_cb = true; // silence if a block comes late
+    if (i2s_new_channel(&chan, &channel, nullptr) != ESP_OK) return false;
+    i2s_std_config_t std_config{};
+    std_config.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(jetstudio::AudioSampleRate);
+    std_config.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+    std_config.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH; // the NS4168 plays one channel, chosen by its CTRL pin: send both
+    std_config.gpio_cfg.mclk = I2S_GPIO_UNUSED;
+    std_config.gpio_cfg.bclk = gpio_num_t(Board::audioBclk);
+    std_config.gpio_cfg.ws = gpio_num_t(Board::audioLrclk);
+    std_config.gpio_cfg.dout = gpio_num_t(Board::audioDout);
+    std_config.gpio_cfg.din = I2S_GPIO_UNUSED;
+    if (i2s_channel_init_std_mode(channel, &std_config) != ESP_OK || i2s_channel_enable(channel) != ESP_OK) return false;
+    mixer.set_max_db(Board::audioMaxDb);
+    return xTaskCreatePinnedToCore(loop, "jet_audio", 3072, nullptr, 3, nullptr, 0) == pdPASS;
+}
+} // namespace audio
+#endif
+
 // Same frame pipeline as CubeCoders' JetExamples, with half-width interlaced fields and no z-buffer (firmware/config).
 // Core 1, game task: scripts, transforms, frame setup and the upper raster band.
 // Core 0, raster worker: the lower raster band.
@@ -271,10 +317,14 @@ void game(void*) {
     if (!present::start(&display, width, height)) stop("Display task not started");
     // The package stays in flash: only the scene being played is decoded into RAM.
     static jetstudio::Runtime runtime;
-    if (!runtime.load_pack(scene_data, sizeof(scene_data), error)) {
+    if (!runtime.load_pack(scene_data, sizeof(scene_data), error, false, true)) {
         ESP_LOGE(Tag, "Invalid scene: %s", error.c_str());
         vTaskDelete(nullptr);
     }
+#if JET_AUDIO
+    if (audio::start()) runtime.set_audio(&audio::mixer);
+    else ESP_LOGW(Tag, "I2S not started: the game runs silent");
+#endif
     std::vector<jetstudio::ScriptDiagnostic> diagnostics;
     if (!runtime.start(diagnostics)) {
         for (const auto& d : diagnostics)
@@ -321,6 +371,10 @@ void game(void*) {
                 total / 60000.0, scripts_time / 60000.0, runtime.triangles(), unsigned(esp_get_free_heap_size()),
                 unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)), rendering / 60000.0, raster_time / 60000.0, raster::split,
                 present::send_time / 60000.0, waiting / 60000.0, unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+#if JET_AUDIO
+            ESP_LOGI(Tag, "Audio mix max %u us of %u us per block", unsigned(audio::mix_max_us.exchange(0, std::memory_order_relaxed)),
+                unsigned(audio::BlockFrames * 1000000 / jetstudio::AudioSampleRate));
+#endif
             count = 0; total = 0; scripts_time = 0; rendering = 0; waiting = 0; raster_time = 0; present::send_time = 0;
         }
         // The task watchdog wants IDLE1 to run on this core.

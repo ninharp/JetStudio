@@ -1305,12 +1305,13 @@ func _autoload_sources() -> Dictionary:
 		sources[path] = text
 	return sources
 
-func _all_assets(doc: Dictionary, others: Dictionary) -> Dictionary:
-	var assets := _scene_assets(doc)
+func _all_assets(doc: Dictionary, others: Dictionary, with_sounds := false) -> Dictionary:
+	var assets := _scene_assets(doc, with_sounds)
 	for other in others.values():
-		var more := _scene_assets(other)
+		var more := _scene_assets(other, with_sounds)
 		assets.textures.merge(more.textures)
 		assets.models.merge(more.models)
+		assets.sounds.merge(more.sounds)
 	return assets
 
 func _scene_sources(doc: Dictionary) -> Dictionary:
@@ -1328,7 +1329,8 @@ func _scene_sources(doc: Dictionary) -> Dictionary:
 var _image_cache := {} # absolute path -> {stamp, image, palette}
 var _model_cache := {} # res path -> {obj_stamp, obj, mtl_file, mtl_stamp, mtl, options, info_stamp, info}
 var _import_cache := {} # res path -> {mtime, settings}
-const PACK_LIMIT := 1024 * 1024 # the largest package the firmware build embeds (tools/tasks.py)
+const PACK_LIMIT_ESP32 := 2304 * 1024 # the largest package the firmware build embeds (tools/tasks.py)
+const PACK_LIMIT_STM32 := 1024 * 1024
 const HEAVY_TEXTURE := 96 * 1024 # above this, adding a texture offers to compress it
 const BOARD_TEXTURE_SIDE := 256
 const BOARD_TRIANGLES := 3000 # above this, adding a model warns about the frame rate on the board
@@ -1446,7 +1448,7 @@ func _pack_plan(pack_size: int) -> Dictionary:
 		var cost := _texture_cost(path, settings)
 		if not cost.is_empty(): entries[path] = {"settings": settings, "cost": cost, "before": cost, "done": false}
 	var size := pack_size
-	while size > PACK_LIMIT:
+	while size > _pack_limit():
 		var largest := ""
 		for path in entries:
 			if not entries[path].done and (largest.is_empty() or int(entries[path].cost.bytes) > int(entries[largest].cost.bytes)):
@@ -1514,14 +1516,17 @@ func _report_memory() -> void:
 		_log("RAM (estimate): about %s, the board has %s: the game probably won't start (%s). Use smaller textures, fewer nodes or simpler meshes." % [
 			kb.call(need), kb.call(available), detail], Style.ERROR)
 
+func _pack_limit() -> int:
+	return PACK_LIMIT_STM32 if Hardware.platform(Hardware.settings(project.config)) == "stm32" else PACK_LIMIT_ESP32
+
 ## Stops a board build whose package is over the limit, offering the compression that makes it fit.
 func _fits_board(pack_path: String, action: String) -> bool:
 	var size := FileAccess.get_file_as_bytes(pack_path).size()
-	if size <= PACK_LIMIT: return true
+	if size <= _pack_limit(): return true
 	var result := _pack_plan(size)
-	var limit := String.humanize_size(PACK_LIMIT)
-	if result.plan.is_empty() or result.size > PACK_LIMIT:
-		_fail("The game takes %s, the board holds %s.\nEven with smaller textures it would take %s: use fewer or simpler models (fewer triangles and parts)." % [
+	var limit := String.humanize_size(_pack_limit())
+	if result.plan.is_empty() or result.size > _pack_limit():
+		_fail("The game takes %s, the board holds %s.\nEven with smaller textures it would take %s: use fewer or simpler models (fewer triangles and parts) or fewer and shorter sounds." % [
 			String.humanize_size(size), limit, String.humanize_size(result.size)])
 		return false
 	var settings := {}
@@ -1602,7 +1607,8 @@ func _mesh_bounds(node: Dictionary) -> Array:
 			return [box.position, box.end]
 	return []
 
-func _scene_assets(doc: Dictionary) -> Dictionary:
+## Sounds only go to exports: a missing or broken WAV must not stop the viewport or Play.
+func _scene_assets(doc: Dictionary, with_sounds := false) -> Dictionary:
 	var textures := {}
 	for path in Document.texture_paths(doc.root):
 		var image := _texture_image(path)
@@ -1611,13 +1617,18 @@ func _scene_assets(doc: Dictionary) -> Dictionary:
 	for path in Document.model_paths(doc.root):
 		var data := _model_data(path)
 		if not data.is_empty(): models[path] = data
-	return {"textures": textures, "models": models}
+	var sounds := {}
+	for path in Document.sound_paths(doc.root) if with_sounds else []:
+		if project.exists(path): sounds[path] = FileAccess.get_file_as_bytes(project.to_abs(path))
+	return {"textures": textures, "models": models, "sounds": sounds}
 
 ## Everything that blocks an export: missing or unreadable files, missing model parts.
 func _missing_assets(doc: Dictionary) -> Array:
 	var missing := []
 	for path in Document.texture_paths(doc.root):
 		if _texture_image(path) == null: missing.append(path + " (PNG missing or unreadable)")
+	for path in Document.sound_paths(doc.root):
+		if not project.exists(path): missing.append(path + " (WAV missing)")
 	var parts := {}
 	for path in Document.model_paths(doc.root):
 		var info := _model_info(path)
@@ -2472,7 +2483,7 @@ func _scene_pack(path: String) -> PackedByteArray:
 	if failed:
 		bottom_tabs.current_tab = 1
 		return PackedByteArray()
-	var assets := _all_assets(doc, others)
+	var assets := _all_assets(doc, others, true)
 	_pack_textures = assets.textures.keys()
 	if splash: assets.textures[BOOT_SPLASH_LOGO] = {"image": _boot_splash_logo(), "palette": "Auto"}
 	bridge.set_scenes(start, others)
@@ -2885,7 +2896,7 @@ func _run_smoke() -> void:
 	var pack_path := _root_dir().path_join(".cache/tests/smoke.jetpack")
 	_check(_export_to(pack_path), "export .jetpack")
 	var bytes := FileAccess.get_file_as_bytes(pack_path)
-	_check(bytes.size() > 100 and bytes.slice(0, 5) == PackedByteArray([74, 69, 84, 80, 17]), "package header JETP v17")
+	_check(bytes.size() > 100 and bytes.slice(0, 5) == PackedByteArray([74, 69, 84, 80, 18]), "package header JETP v18")
 	# 2D nodes
 	_add_node("ColorRect", int(_root_node().id))
 	var rect_id: int = _tab().selected
@@ -3061,6 +3072,39 @@ func _run_smoke() -> void:
 	_stop()
 	_check(timed_out, "a Timer emits timeout, a script signal passes it on")
 	_delete_node(timer_id)
+	# AudioStreamPlayer: node, WAV in the Inspector's path, export, and a clear error for a bad file
+	var wav := PackedByteArray()
+	wav.append_array("RIFF".to_ascii_buffer()); wav.resize(wav.size() + 4); wav.encode_u32(4, 40)
+	wav.append_array("WAVEfmt ".to_ascii_buffer())
+	var fmt := PackedByteArray(); fmt.resize(20)
+	fmt.encode_u32(0, 16); fmt.encode_u16(4, 1); fmt.encode_u16(6, 1); fmt.encode_u32(8, 22050); fmt.encode_u32(12, 44100); fmt.encode_u16(16, 2); fmt.encode_u16(18, 16)
+	wav.append_array(fmt)
+	wav.append_array("data".to_ascii_buffer())
+	var body := PackedByteArray(); body.resize(8); body.encode_u32(0, 4); body.encode_s16(4, 1000); body.encode_s16(6, -1000)
+	wav.append_array(body)
+	var wav_file := FileAccess.open(project.to_abs("res://smoke.wav"), FileAccess.WRITE)
+	wav_file.store_buffer(wav); wav_file.close()
+	_add_node("AudioStreamPlayer", int(_root_node().id))
+	var sound_id: int = _tab().selected
+	_rename_node(sound_id, "Sfx")
+	_property_edited("stream", "res://smoke.wav", true)
+	_property_edited("volume_db", -3.0, true)
+	_check(Document.sound_paths(_root_node()) == ["res://smoke.wav"], "the document lists its sounds")
+	_check(_export_to("user://smoke_sound.jetpack"), "export with a sound")
+	_check(FileAccess.get_file_as_bytes("user://smoke_sound.jetpack").hex_encode().contains("res://smoke.wav".to_ascii_buffer().hex_encode()), "the package holds the sound")
+	DirAccess.remove_absolute(project.to_abs("res://smoke.wav"))
+	var before_log := output.get_parsed_text()
+	_property_edited("volume_db", -4.0, true)
+	_check(not output.get_parsed_text().substr(before_log.length()).contains("Invalid scene"), "a missing WAV does not break the scene")
+	_check(not _export_to("user://smoke_sound.jetpack"), "a missing WAV blocks the export")
+	_check(output.get_parsed_text().contains("(WAV missing)"), "the export names the missing WAV")
+	var wav_again := FileAccess.open(project.to_abs("res://smoke.wav"), FileAccess.WRITE)
+	wav_again.store_buffer(wav); wav_again.close()
+	var bad_file := FileAccess.open(project.to_abs("res://smoke.wav"), FileAccess.WRITE)
+	bad_file.store_string("not audio"); bad_file.close()
+	_check(not _export_to("user://smoke_sound.jetpack"), "a broken WAV blocks the export")
+	_delete_node(sound_id)
+	DirAccess.remove_absolute(project.to_abs("res://smoke.wav"))
 	# Signals connected in the Signals dock: the Connect dialog's name, the stub added to the script, Play, undo, deletion
 	_add_node("Timer", int(_root_node().id))
 	var ticker_id: int = _tab().selected
@@ -3244,12 +3288,17 @@ func _run_smoke() -> void:
 	_kept_textures["res://models/huge.png"] = true
 	_file_dropped(int(lid.id), "res://models/huge.png")
 	var big_pack := _root_dir().path_join(".cache/tests/smoke_big.jetpack")
+	_check(_export_to(big_pack) and _fits_board(big_pack, "build") and not compress_dialog.visible, "a package of 1.2 MB fits the ESP32 limit (2.25 MiB)")
+	var esp_hardware = project.config.get("hardware")
+	project.config.hardware = {"board": "nucleo_f767zi"}
 	_check(_export_to(big_pack) and not _fits_board(big_pack, "build") and compress_dialog.visible and _compression.has("res://models/huge.png"),
-		"a package over 1 MiB stops the board build and offers compression")
+		"a package over 1 MiB stops an STM32 build and offers compression")
 	compress_dialog.hide()
 	_after_compression = Callable()
 	_apply_compression()
 	_check(_export_to(big_pack) and _fits_board(big_pack, "build"), "after compression the package fits the board")
+	if esp_hardware == null: project.config.erase("hardware")
+	else: project.config.hardware = esp_hardware
 	_undo()
 	_undo()
 	# Sprite3D

@@ -1,5 +1,6 @@
 #include "jet_bridge.hpp"
 #include "physics.hpp"
+#include "wav_import.hpp"
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -161,7 +162,26 @@ struct Flattener {
     jetstudio::Description d;
     const Dictionary& sources;
     String error;
-    Dictionary images, models;
+    Dictionary images, models, sounds;
+    // Sound index for a res:// path; -1 for none, -2 on error.
+    int sound_index(const String& path) {
+        if (path.is_empty()) return -1;
+        const std::string p = utf8(path);
+        for (size_t i = 0; i < d.sounds.size(); ++i) if (d.sounds[i].path == p) return int(i);
+        // A missing file plays nothing; the editor reports it and refuses exports.
+        if (!sounds.has(path)) return -1;
+        const PackedByteArray bytes = sounds[path];
+        jetstudio::SoundAsset sound;
+        sound.path = p;
+        std::string message;
+        if (!jetstudio::decode_wav(bytes.ptr(), size_t(bytes.size()), sound.bytes, message)) {
+            error = path + String(": ") + gd(message);
+            return -2;
+        }
+        sound.frames = uint32_t(sound.bytes.size() / 2);
+        d.sounds.push_back(std::move(sound));
+        return int(d.sounds.size()) - 1;
+    }
     std::unordered_map<std::string, JetBridge::CachedTexture>* textures = nullptr;
     std::unordered_map<std::string, JetBridge::CachedModel>* parsed = nullptr;
     // Texture index for a res:// path; -1 for none, -2 on error.
@@ -258,7 +278,7 @@ struct Flattener {
                                                "Label", "TextureRect", "ColorRect", "StaticBody3D", "CharacterBody3D",
                                                "RigidBody3D", "Area3D", "CollisionShape3D", "CPUParticles3D", "Sprite3D", "Control",
                                                "Node2D", "Sprite2D", "AnimatedSprite2D", "Camera2D", "StaticBody2D", "CharacterBody2D",
-                                               "RigidBody2D", "Area2D", "CollisionShape2D", "Timer", "AnimationPlayer"})) {
+                                               "RigidBody2D", "Area2D", "CollisionShape2D", "Timer", "AnimationPlayer", "AudioStreamPlayer"})) {
                 error = "Unsupported node type: " + String(node["type"]); return false;
             }
             jetstudio::Vec3 uv_scale{n.uv_scale[0], n.uv_scale[1], 1}, uv_offset{};
@@ -323,6 +343,12 @@ struct Flattener {
             if (n.type == NodeType::Timer) {
                 n.extras().autoplay = false;
                 ok = ok && real(node, "wait_time", n.extras().lifetime) && flag(node, "autostart", n.extras().autoplay);
+            }
+            if (n.type == NodeType::AudioStreamPlayer) {
+                n.extras().autoplay = false;
+                ok = ok && real(node, "volume_db", n.extras().volume_db) && flag(node, "autoplay", n.extras().autoplay) && flag(node, "loop", n.extras().loop);
+                n.extras().sound = sound_index(node.get("stream", ""));
+                if (n.extras().sound == -2) return false;
             }
             // "size" is in pixels on Controls; on a collision shape it is the box (rectangle) size.
             if (jetstudio::physics::is_collision_shape(n.type)) {
@@ -476,6 +502,7 @@ String JetBridge::load_scene(const Dictionary& document, const Dictionary& scrip
     Flattener flat{{}, scripts, {}};
     flat.images = assets.get("textures", Dictionary());
     flat.models = assets.get("models", Dictionary());
+    flat.sounds = assets.get("sounds", Dictionary());
     flat.textures = &texture_cache_;
     flat.parsed = &model_cache_;
     if (!flat.run(document["root"])) return flat.error;

@@ -234,7 +234,7 @@ void setup() {
     // Before the scene, so a big scene can't take its place. Optional: without it there is one field buffer.
     fields[1] = static_cast<uint16_t*>(__real_malloc(size_t(width / jetstudio::BufferColumnStep) * (height / jetstudio::BufferRowStep) * 2));
 #endif
-    if (!runtime->load_pack(scene_data, sizeof(scene_data), error, true)) halt(("Invalid scene: " + error).c_str());
+    if (!runtime->load_pack(scene_data, sizeof(scene_data), error, true, true)) halt(("Invalid scene: " + error).c_str());
     std::vector<jetstudio::ScriptDiagnostic> diagnostics;
     if (!runtime->start(diagnostics)) {
         for (const auto& d : diagnostics) log_line('E', "%s:%d:%d %s", d.path.c_str(), d.line, d.column, d.message.c_str());
