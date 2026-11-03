@@ -54,6 +54,26 @@ def input_map(config):
     return out
 
 
+def touch_zones(config, actions, board):
+    """Boards with a touch panel: screen areas (percent) that press an action, from the project or the board's defaults."""
+    touch = board.get("touch")
+    if not touch:
+        return ""
+    zones = config.get("touch_zones", touch["zones"])
+    rows = []
+    for bit, (name, _) in enumerate(actions):
+        if name in zones:
+            x0, y0, x1, y1 = (int(value) for value in zones[name])
+            if not (0 <= x0 < x1 <= 100 and 0 <= y0 < y1 <= 100):
+                raise RuntimeError(f"Touch zone of {name}: expected [left, top, right, bottom] in percent")
+            rows.append(f"    {{{bit}, {x0}, {y0}, {x1}, {y1}}},")
+    if not rows:
+        return ""
+    return ("// Touch zones in percent of the screen: action bit, left, top, right, bottom.\n#define JET_TOUCH_ZONES 1\n"
+            "struct TouchZone { uint8_t bit, left, top, right, bottom; };\n"
+            "static constexpr TouchZone touch_zones[] = {\n" + "\n".join(rows) + "\n};\n")
+
+
 def generate_inputs(config, firmware, board):
     """Writes generated_inputs.hpp; returns the [(action, pin)] that are wired, for the hardware check."""
     actions = input_map(config)
@@ -70,6 +90,7 @@ def generate_inputs(config, firmware, board):
                "// pressed = high (it has its own pull-down).\n"
                f"static constexpr int input_pins[{len(pins)}] = {{{', '.join(map(str, pins))}}};\n"
                f"static constexpr uint32_t input_active_high = 0x{active_high:x};\n")
+    content += touch_zones(config, actions, board)
     hardware.write_if_changed(firmware / "src/generated_inputs.hpp", content)
     print("Buttons: " + (", ".join(f"{a}={hardware.pin_label(board, p)}" for a, p in actions if p >= 0) or "none"), flush=True)
     return [(a, p) for a, p in actions if p >= 0]

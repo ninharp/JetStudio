@@ -1,0 +1,22 @@
+{
+  "name": "WT32-SC01 Plus ST7796 320×480",
+  "controller": "ST7796",
+  "panel": [
+    320,
+    480
+  ],
+  "memory": [
+    320,
+    480
+  ],
+  "offset": [
+    0,
+    0
+  ],
+  "invert": true,
+  "rgb_order": false,
+  "spi_hz": 20000000,
+  "spi_mode": 0,
+  "verified": true,
+  "notes": "Built-in panel on the 8-bit parallel bus; the clock below is the bus write clock."
+}

@@ -42,7 +42,7 @@ static func settings(config: Dictionary) -> Dictionary:
 	if int(hw.get("spi_hz", 0)) <= 0: hw.spi_hz = int(display.get("spi_hz", 40000000))
 	var pins: Dictionary = boards.get(hw.board, {}).get("display_pins", {}).duplicate()
 	for key in hw.get("pins", {}):
-		if key in DISPLAY_PINS: pins[key] = int(hw.pins[key])
+		if key in display_pins(hw): pins[key] = int(hw.pins[key])
 	hw.pins = pins
 	return hw
 
@@ -81,6 +81,11 @@ static func pin_label(hw: Dictionary, gpio: int) -> String:
 		return "%s · GPIO%d" % [entry[0], gpio]
 	return "P%s%d" % ["ABCDEFGHIJK"[(gpio >> 4) & 15], gpio & 15] if stm32 else "GPIO%d" % gpio
 
+## The pins a board lets you choose: a built-in parallel bus (profile's parallel8) has no SCK, MOSI or CS.
+static func display_pins(hw: Dictionary) -> Array:
+	if not boards.get(str(hw.get("board", "")), {}).has("parallel8"): return DISPLAY_PINS
+	return DISPLAY_PINS.filter(func(key): return not key in ["sck", "mosi", "cs"])
+
 ## STM32 SCK/MOSI off the SPI peripheral: the firmware sends bit by bit (same check as tools/hardware.py).
 static func software_spi(hw: Dictionary) -> bool:
 	for key in ["sck", "mosi"]:
@@ -94,7 +99,7 @@ static func problems(hw: Dictionary, buttons: Dictionary = {}) -> Array:
 	var usable := {}
 	for entry in board_pins(hw): usable[int(entry[1])] = true
 	var used := {}
-	for key in DISPLAY_PINS:
+	for key in display_pins(hw):
 		var pin := int(hw.pins.get(key, -1))
 		if pin < 0:
 			if not key in OPTIONAL_PINS: out.append("Display pin %s not set." % PIN_NAMES[key])
@@ -105,6 +110,9 @@ static func problems(hw: Dictionary, buttons: Dictionary = {}) -> Array:
 	for action in buttons:
 		var pin := int(buttons[action])
 		if used.has(pin): out.append("The %s button pin is also the display's %s pin." % [action, PIN_NAMES[used[pin]]])
+	var parallel: Dictionary = boards.get(str(hw.get("board", "")), {}).get("parallel8", {})
+	if not parallel.is_empty() and int(hw.get("spi_hz", 0)) > int(parallel.max_hz):
+		out.append("The display bus of this board runs at %d MHz at most." % (int(parallel.max_hz) / 1000000))
 	var size := resolution(hw)
 	if size.x % 2 or size.y % 2 or mini(size.x, size.y) < 64 or size.x > 800 or size.y > 480:
 		out.append("Resolution %d×%d not supported (even sides, 64 up to 800×480)." % [size.x, size.y])

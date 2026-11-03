@@ -150,7 +150,7 @@ void send_field() {
 }
 
 void loop(void*) {
-    queued = scanout.init(display, rows[0], rows[1], unsigned(width), unsigned(height));
+    queued = !Board::parallelBus && scanout.init(display, rows[0], rows[1], unsigned(width), unsigned(height));
     xSemaphoreGive(idle);
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -195,6 +195,21 @@ void configure_buttons() {
         config.pull_up_en = GPIO_PULLUP_ENABLE;
         gpio_config(&config);
     }
+}
+
+// Each finger presses the actions whose zone it is in. Two fingers: steer and fire at the same time.
+uint32_t read_touch(LGFX& display, int width, int height) {
+    uint32_t mask = 0;
+#if JET_TOUCH_ZONES
+    lgfx::touch_point_t points[2];
+    const int count = display.getTouch(points, 2);
+    for (int i = 0; i < count; ++i) {
+        const int x = points[i].x * 100 / width, y = points[i].y * 100 / height;
+        for (const auto& zone : touch_zones)
+            if (x >= zone.left && x < zone.right && y >= zone.top && y < zone.bottom) mask |= 1u << zone.bit;
+    }
+#endif
+    return mask;
 }
 
 uint32_t read_buttons() {
@@ -283,7 +298,7 @@ void game(void*) {
         const int64_t start = esp_timer_get_time();
         const int parity = runtime.next_field();
         runtime.set_framebuffer(fields[parity]);
-        runtime.set_input(read_buttons());
+        runtime.set_input(read_buttons() | read_touch(display, width, height));
         runtime.update(float(start - previous) / 1000000.0f);
         const int64_t updated = esp_timer_get_time();
         previous = start;

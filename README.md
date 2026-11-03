@@ -430,6 +430,7 @@ firmware configuration (`generated_board.hpp` and the board's PlatformIO environ
 | ESP32-S3-DevKitC-1 N8R8 | 8 MB flash, 8 MB octal PSRAM: the board of the JetExamples demos |
 | ESP32-S3-DevKitC-1 N16R8 | 16 MB flash, 8 MB octal PSRAM |
 | ESP32-S3-DevKitC-1 N8R2 | 8 MB flash, 2 MB quad PSRAM |
+| WT32-SC01 Plus | 16 MB flash, 2 MB quad PSRAM, built-in ST7796 on an 8-bit parallel bus and FT6336U touch. **Tested**. Actions come from touch zones: `touch_zones` in `project.jetproject`, `{"ui_accept": [50, 33, 100, 100]}` as left, top, right, bottom in percent of the screen |
 | ST Nucleo-F767ZI | STM32F767, Cortex-M7 216 MHz, 512 KB RAM, 2 MB flash |
 | ST Nucleo-F746ZG | STM32F746, Cortex-M7 216 MHz, 320 KB RAM, 1 MB flash. **Tested** (ILI9341 on SPI1 with DMA, 54 MHz) |
 | ST Nucleo-F722ZE | STM32F722, Cortex-M7 216 MHz, 256 KB RAM, 512 KB flash |
@@ -474,7 +475,7 @@ The firmware takes ~425 KB of flash (Jet, runtime, VM and LovyanGFX): on the 512
 | ST7735S 1.8" | 160×128 |
 | Custom | controller (ILI9341, ST7789, ST7796, GC9A01, ST7735S), panel, offset, colors |
 
-All combinations compile; Nano ESP32 + ILI9341 and Nucleo-F746ZG + ILI9341 have been tested on hardware. ESP32-P4
+All combinations compile; Nano ESP32 + ILI9341, Nucleo-F746ZG + ILI9341 and the WT32-SC01 Plus have been tested on hardware. ESP32-P4
 boards (supported by Jet) are not available yet: the PlatformIO espressif32 7.0.1 builder
 used by Jet Studio does not know them. The ILI9488 is excluded: over SPI it only accepts 18-bit
 colors. New boards or displays are added with a JSON file in `hardware/`.

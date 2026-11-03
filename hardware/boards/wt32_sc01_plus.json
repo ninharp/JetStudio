@@ -1,0 +1,126 @@
+{
+  "name": "WT32-SC01 Plus",
+  "short": "SC01 Plus",
+  "chip": "esp32s3",
+  "platformio_board": "esp32-s3-devkitc-1",
+  "platformio_options": [
+    "board_upload.flash_size = 16MB"
+  ],
+  "flash": "16 MB",
+  "psram": "2 MB quad",
+  "sdkconfig": [
+    "CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y",
+    "CONFIG_ESPTOOLPY_FLASHMODE_QIO=y",
+    "CONFIG_ESPTOOLPY_FLASHFREQ_80M=y",
+    "CONFIG_SPIRAM=y",
+    "CONFIG_SPIRAM_MODE_QUAD=y",
+    "CONFIG_SPIRAM_SPEED_80M=y",
+    "CONFIG_ESP_CONSOLE_UART_DEFAULT=y"
+  ],
+  "pins": [
+    [
+      "GPIO0",
+      0
+    ],
+    [
+      "GPIO4",
+      4
+    ],
+    [
+      "GPIO10",
+      10
+    ],
+    [
+      "GPIO11",
+      11
+    ],
+    [
+      "GPIO12",
+      12
+    ],
+    [
+      "GPIO13",
+      13
+    ],
+    [
+      "GPIO14",
+      14
+    ],
+    [
+      "GPIO21",
+      21
+    ],
+    [
+      "GPIO45",
+      45
+    ]
+  ],
+  "display_pins": {
+    "dc": 0,
+    "reset": 4,
+    "backlight": 45
+  },
+  "parallel8": {
+    "wr": 47,
+    "data": [
+      9,
+      46,
+      3,
+      8,
+      18,
+      17,
+      16,
+      15
+    ],
+    "max_hz": 40000000
+  },
+  "touch": {
+    "driver": "Touch_FT5x06",
+    "i2c_port": 1,
+    "i2c_addr": 56,
+    "sda": 6,
+    "scl": 5,
+    "int": 7,
+    "freq": 400000,
+    "zones": {
+      "ui_up": [
+        0,
+        0,
+        50,
+        33
+      ],
+      "ui_down": [
+        0,
+        67,
+        50,
+        100
+      ],
+      "ui_left": [
+        0,
+        33,
+        25,
+        67
+      ],
+      "ui_right": [
+        25,
+        33,
+        50,
+        67
+      ],
+      "ui_accept": [
+        50,
+        33,
+        100,
+        100
+      ],
+      "ui_cancel": [
+        75,
+        0,
+        100,
+        33
+      ]
+    }
+  },
+  "verified": true,
+  "notes": "ST7796 on the built-in 8-bit bus and FT6336U touch: use the WT32-SC01 Plus display. Free for buttons: GPIO10-14 and GPIO21. Touch zones: touch_zones in project.jetproject (percent of the screen)."
+}

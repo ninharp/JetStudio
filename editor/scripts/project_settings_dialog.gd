@@ -20,6 +20,7 @@ var _orientation: OptionButton
 var _resolution: Label
 var _spi: SpinBox
 var _pins := {}    # display pin -> OptionButton
+var _pin_rows := {} # display pin -> its controls, hidden when the board has no such pin
 var _custom := {}  # custom display field -> control
 var _custom_rows := []
 var _actions := []      # Input Map being edited: {name, keys, pin}
@@ -113,6 +114,7 @@ func _ready() -> void:
 	for key in Hardware.DISPLAY_PINS:
 		var pin_key: String = key
 		_pins[key] = _option(hardware, Hardware.PIN_NAMES[key] + ":", func(i): _pin_chosen(pin_key, i))
+		_pin_rows[key] = _last_row(hardware)
 	var defaults := Button.new()
 	defaults.text = "Board default pins"
 	defaults.pressed.connect(func():
@@ -246,6 +248,7 @@ func _refresh() -> void:
 			if int(entry[1]) in fast: label += "  · " + str(Hardware.boards[_hw.board].spi.port)
 			option.add_item(label)
 		_select_gpio(option, int(_hw.pins.get(key, -1)))
+		for control in _pin_rows[key]: control.visible = key in Hardware.display_pins(_hw)
 	_refresh_buttons()
 	_filling = false
 	_check()

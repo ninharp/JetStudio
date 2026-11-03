@@ -11,6 +11,7 @@ constexpr int screenWidth = 320, screenHeight = 240, rotation = 1;
 constexpr int clock = 48, mosi = 38, dc = 9, cs = 21, reset = 12, backlight = -1;
 constexpr int spiMode = 0;
 constexpr int writeHz = 40000000;
+constexpr bool parallelBus = false;
 }
 
 class LGFX : public lgfx::LGFX_Device {

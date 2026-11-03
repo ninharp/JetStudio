@@ -28,6 +28,11 @@ def firmware_dir(board):
     return FIRMWARE_STM32 if platform(board) == "stm32" else FIRMWARE
 
 
+def display_pin_names(board):
+    """A board with a built-in parallel bus has its data lines soldered (profile's parallel8): no SCK, MOSI or CS."""
+    return [name for name in DISPLAY_PINS if name not in ("sck", "mosi", "cs")] if board.get("parallel8") else DISPLAY_PINS
+
+
 def pin_label(board, pin):
     for label, number in board["pins"]:
         if number == pin:
@@ -52,7 +57,7 @@ def settings(config):
         hw["orientation"] = "landscape"
     hw["spi_hz"] = int(hw.get("spi_hz") or display["spi_hz"])
     pins = dict(boards[hw["board"]]["display_pins"])
-    pins.update({k: int(v) for k, v in hw.get("pins", {}).items() if k in DISPLAY_PINS})
+    pins.update({k: int(v) for k, v in hw.get("pins", {}).items() if k in display_pin_names(boards[hw["board"]])})
     hw["pins"] = pins
     return hw, boards[hw["board"]], display
 
@@ -73,7 +78,7 @@ def rotation(display, orientation):
 def validate(hw, board, display, button_pins=()):
     usable = {gpio for _, gpio in board["pins"]}
     used = {}
-    for name in DISPLAY_PINS:
+    for name in display_pin_names(board):
         pin = hw["pins"].get(name, -1)
         if pin < 0:
             if name not in OPTIONAL_PINS:
@@ -96,6 +101,9 @@ def validate(hw, board, display, button_pins=()):
         raise RuntimeError(f"Display resolution {width}x{height} is not supported (even sides, at least 64)")
     if not 1000000 <= hw["spi_hz"] <= 80000000:
         raise RuntimeError("SPI clock must be between 1 and 80 MHz")
+    parallel = board.get("parallel8")
+    if parallel and hw["spi_hz"] > parallel["max_hz"]:
+        raise RuntimeError(f"The display bus of {board['name']} runs at {parallel['max_hz'] // 1000000} MHz at most")
 
 
 def write_if_changed(path, text):
@@ -110,6 +118,42 @@ def software_spi(hw, board):
     return bool(spi) and (hw["pins"]["sck"] not in spi["sck"] or hw["pins"]["mosi"] not in spi["mosi"])
 
 
+def esp32_light():
+    return "    lgfx::Light_PWM light;\n", """        if (Board::backlight >= 0) {
+            auto l = light.config();
+            l.pin_bl = Board::backlight;
+            l.invert = false;
+            l.freq = 44100;
+            l.pwm_channel = 7;
+            light.config(l);
+            panel.setLight(&light);
+        }
+"""
+
+
+def touch_lines(board, panel_w, panel_h):
+    """The LGFX members for a board's built-in touch panel; main.cpp turns its points into actions."""
+    touch = board.get("touch")
+    if not touch:
+        return "", ""
+    return f"    lgfx::{touch['driver']} touch;\n", f"""        auto t = touch.config();
+        t.x_min = 0;
+        t.x_max = {panel_w - 1};
+        t.y_min = 0;
+        t.y_max = {panel_h - 1};
+        t.pin_int = {touch['int']};
+        t.bus_shared = false;
+        t.offset_rotation = {touch.get('offset_rotation', 0)};
+        t.i2c_port = {touch['i2c_port']};
+        t.i2c_addr = {touch['i2c_addr']};
+        t.pin_sda = {touch['sda']};
+        t.pin_scl = {touch['scl']};
+        t.freq = {touch['freq']};
+        touch.config(t);
+        panel.setTouch(&touch);
+"""
+
+
 def board_header(hw, board, display):
     p = hw["pins"]
     width, height = resolution(display, hw["orientation"])
@@ -120,6 +164,7 @@ def board_header(hw, board, display):
     source = f"hardware/boards/{hw['board']}.json, " + (
         "custom display" if hw["display"] == "custom" else f"hardware/displays/{hw['display']}.json")
     bus_class = "lgfx::Bus_SPI"
+    spi_pins = True
     if stm32 and software_spi(hw, board):
         includes = '#define JET_SOFT_SPI 1\n#include "soft_spi.hpp"\n'
         pins_note = "// Pins are STM32 PinName values (port * 16 + pin). SCK/MOSI aren't on the SPI peripheral: software SPI.\n"
@@ -146,8 +191,23 @@ inline void begin_spi() {{
         b.freq_write = Board::writeHz;
         b.freq_read = 8000000;"""
         light_member, light = "", ""  # main.cpp switches the backlight on
+    elif board.get("parallel8"):
+        parallel = board["parallel8"]
+        includes, pins_note = "", ""
+        board_extra = "constexpr bool parallelBus = true; // the queued scanout is SPI only\n"
+        data_pins = "\n".join(f"        b.pin_d{i} = {pin};" for i, pin in enumerate(parallel["data"]))
+        bus, bus_class = f"""        b.port = 0;
+        b.freq_write = Board::writeHz;
+        b.freq_read = 8000000;
+        b.pin_wr = {parallel["wr"]};
+        b.pin_rd = -1;
+        b.pin_rs = Board::dc;
+{data_pins}""", "lgfx::Bus_Parallel8"
+        spi_pins = False
+        light_member, light = esp32_light()
     else:
-        includes, pins_note, board_extra = "", "", ""
+        includes, pins_note = "", ""
+        board_extra = "constexpr bool parallelBus = false;\n"
         bus = """        b.spi_host = SPI2_HOST; // required by the queued DMA scanout
         b.spi_mode = Board::spiMode;
         b.freq_write = Board::writeHz;
@@ -155,18 +215,15 @@ inline void begin_spi() {{
         b.spi_3wire = false;
         b.use_lock = true;
         b.dma_channel = SPI_DMA_CH_AUTO;"""
-        light_member = "    lgfx::Light_PWM light;\n"
-        light = """        if (Board::backlight >= 0) {
-            auto l = light.config();
-            l.pin_bl = Board::backlight;
-            l.invert = false;
-            l.freq = 44100;
-            l.pwm_channel = 7;
-            light.config(l);
-            panel.setLight(&light);
-        }
-"""
+        light_member, light = esp32_light()
     bus_lines = bus + "\n" if bus else ""
+    if spi_pins:
+        bus_lines += """        b.pin_sclk = Board::clock;
+        b.pin_mosi = Board::mosi;
+        b.pin_miso = -1;
+        b.pin_dc = Board::dc;
+"""
+    touch_member, touch_setup = touch_lines(board, panel_w, panel_h)
     return f"""#pragma once
 // Generated by tools/hardware.py from {source} and the project's hardware settings.
 // Do not edit: change them in Project Settings.
@@ -177,23 +234,19 @@ inline void begin_spi() {{
 namespace Board {{
 constexpr const char* name = {json.dumps(board['name'] + ' + ' + display['name'], ensure_ascii=False)};
 constexpr int screenWidth = {width}, screenHeight = {height}, rotation = {rotation(display, hw['orientation'])};
-{pins_note}constexpr int clock = {p['sck']}, mosi = {p['mosi']}, dc = {p['dc']}, cs = {p['cs']}, reset = {p.get('reset', -1)}, backlight = {p.get('backlight', -1)};
+{pins_note}constexpr int clock = {p.get('sck', -1)}, mosi = {p.get('mosi', -1)}, dc = {p['dc']}, cs = {p.get('cs', -1)}, reset = {p.get('reset', -1)}, backlight = {p.get('backlight', -1)};
 constexpr int spiMode = {display.get('spi_mode', 0)};
 constexpr int writeHz = {hw['spi_hz']};
 {board_extra}}}
 
 class LGFX : public lgfx::LGFX_Device {{
     lgfx::{CONTROLLERS[display['controller']]} panel;
-{light_member}    {bus_class} bus;
+{light_member}{touch_member}    {bus_class} bus;
 public:
     {bus_class}& panel_bus() {{ return bus; }}
     LGFX() {{
         auto b = bus.config();
-{bus_lines}        b.pin_sclk = Board::clock;
-        b.pin_mosi = Board::mosi;
-        b.pin_miso = -1;
-        b.pin_dc = Board::dc;
-        bus.config(b);
+{bus_lines}        bus.config(b);
         panel.setBus(&bus);
         auto c = panel.config();
         c.pin_cs = Board::cs;
@@ -214,7 +267,7 @@ public:
         c.dlen_16bit = false;
         c.bus_shared = false;
         panel.config(c);
-{light}        setPanel(&panel);
+{light}{touch_setup}        setPanel(&panel);
     }}
 }};
 """
@@ -227,7 +280,7 @@ def boards_ini(target):
         if firmware_dir(board) != target:
             continue
         if target == FIRMWARE:
-            lines += [f"[env:{key}]", "extends = jet", f"board = {board['platformio_board']}",
+            lines += [f"[env:{key}]", "extends = jet", f"board = {board['platformio_board']}", *board.get("platformio_options", []),
                       f"board_build.cmake_extra_args = -DJET_BOARD={key}", "",
                       f"[env:{key}_release]", f"extends = env:{key}",
                       f"board_build.cmake_extra_args = -DJET_BOARD={key} -DJET_RELEASE=ON", ""]
